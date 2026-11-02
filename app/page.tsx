@@ -24,6 +24,7 @@ import {
   Copy,
   ClipboardCopy,
   ClipboardPaste,
+  ClipboardCheck,
   Sliders,
   Upload,
   Settings,
@@ -174,6 +175,28 @@ export default function Home() {
   const [copySourceDate, setCopySourceDate] = useState('');
   const [copyTargetDate, setCopyTargetDate] = useState('');
   const [copying, setCopying] = useState(false);
+
+  // Week Clipboard Buffer State
+  interface WeekBuffer {
+    sourceStart: string;
+    count: number;
+    teamId?: string;
+  }
+  const [copiedWeekBuffer, setCopiedWeekBuffer] = useState<WeekBuffer | null>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('teams_shifts_copied_week');
+        if (saved) return JSON.parse(saved);
+      } catch {}
+    }
+    return null;
+  });
+
+  // Calendar Picker State in Copy Modal
+  const [calendarViewYear, setCalendarViewYear] = useState<number>(new Date().getFullYear());
+  const [calendarViewMonth, setCalendarViewMonth] = useState<number>(new Date().getMonth());
+  const [targetWeekDate, setTargetWeekDate] = useState<Date>(() => addWeeks(startOfWeek(new Date(), { weekStartsOn: 1 }), 1));
+  const [jumpAfterCopy, setJumpAfterCopy] = useState<boolean>(true);
 
   // Inline member creation state
   const [addingMemberGroup, setAddingMemberGroup] = useState<string | null>(null);
@@ -440,11 +463,15 @@ export default function Home() {
   }, [selectedTeamId, currentDate]);
 
   useEffect(() => {
-    if (!copyModalOpen) {
-      setCopySourceDate(format(subWeeks(start, 1), 'yyyy-MM-dd'));
-      setCopyTargetDate(format(start, 'yyyy-MM-dd'));
+    if (copyModalOpen) {
+      const nextWk = addWeeks(start, 1);
+      setCopySourceDate(format(start, 'yyyy-MM-dd'));
+      setTargetWeekDate(nextWk);
+      setCopyTargetDate(format(nextWk, 'yyyy-MM-dd'));
+      setCalendarViewYear(nextWk.getFullYear());
+      setCalendarViewMonth(nextWk.getMonth());
     }
-  }, [currentDate, copyModalOpen]);
+  }, [copyModalOpen, start]);
 
   // Team Selection
   const switchTeam = (teamId: string) => {
@@ -750,13 +777,15 @@ export default function Home() {
     if (!teamId) return;
     setCopying(true);
     try {
+      const source = new Date(copySourceDate || start);
+      const target = new Date(copyTargetDate || targetWeekDate);
       const res = await fetch('/api/shifts/copy', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           type: copyType,
-          sourceDate: new Date(copySourceDate).toISOString(),
-          targetDate: new Date(copyTargetDate).toISOString(),
+          sourceDate: source.toISOString(),
+          targetDate: target.toISOString(),
           teamId,
         }),
       });
@@ -764,7 +793,10 @@ export default function Home() {
         const data = await res.json();
         setCopyModalOpen(false);
         await loadData();
-        showToast(`Successfully copied ${data.count || 0} shifts`);
+        showToast(`Successfully copied ${data.count || 0} shifts to week of ${format(target, 'MMM d, yyyy')}`);
+        if (jumpAfterCopy && !isSameDay(start, target)) {
+          setCurrentDate(target);
+        }
       } else {
         showToast('Failed to copy shifts', 'error');
       }
@@ -773,6 +805,102 @@ export default function Home() {
       showToast('Error copying shifts', 'error');
     }
     setCopying(false);
+  };
+
+  // Copy active week to clipboard buffer
+  const handleCopyWeekToBuffer = () => {
+    const bufferData: WeekBuffer = {
+      sourceStart: start.toISOString(),
+      count: shifts.length,
+      teamId: selectedTeamId || currentTeam?.id,
+    };
+    setCopiedWeekBuffer(bufferData);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('teams_shifts_copied_week', JSON.stringify(bufferData));
+    }
+    showToast(`Copied week of ${format(start, 'MMM d')} to clipboard (${shifts.length} shifts)`);
+  };
+
+  // Clear week clipboard buffer
+  const handleClearWeekBuffer = () => {
+    setCopiedWeekBuffer(null);
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('teams_shifts_copied_week');
+    }
+    showToast('Cleared shift clipboard');
+  };
+
+  // Paste week from buffer to target date
+  const handlePasteWeekFromBuffer = async (targetDate: Date) => {
+    if (!copiedWeekBuffer) return;
+    const teamId = selectedTeamId || currentTeam?.id;
+    if (!teamId) return;
+    setCopying(true);
+    try {
+      const res = await fetch('/api/shifts/copy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'WEEK',
+          sourceDate: copiedWeekBuffer.sourceStart,
+          targetDate: targetDate.toISOString(),
+          teamId,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setCopyModalOpen(false);
+        await loadData();
+        showToast(`Pasted ${data.count || 0} shifts into week of ${format(targetDate, 'MMM d, yyyy')}!`);
+        if (jumpAfterCopy && !isSameDay(start, targetDate)) {
+          setCurrentDate(targetDate);
+        }
+      } else {
+        const data = await res.json();
+        showToast(data.error || 'Failed to paste shifts', 'error');
+      }
+    } catch (err) {
+      console.error(err);
+      showToast('Error pasting shifts', 'error');
+    }
+    setCopying(false);
+  };
+
+  // Calendar Picker Helpers
+  const handlePrevMonth = () => {
+    if (calendarViewMonth === 0) {
+      setCalendarViewMonth(11);
+      setCalendarViewYear(prev => prev - 1);
+    } else {
+      setCalendarViewMonth(prev => prev - 1);
+    }
+  };
+
+  const handleNextMonth = () => {
+    if (calendarViewMonth === 11) {
+      setCalendarViewMonth(0);
+      setCalendarViewYear(prev => prev + 1);
+    } else {
+      setCalendarViewMonth(prev => prev + 1);
+    }
+  };
+
+  const selectWeekPreset = (weeksOffset: number) => {
+    const newTarget = addWeeks(start, weeksOffset);
+    setTargetWeekDate(newTarget);
+    setCopyTargetDate(format(newTarget, 'yyyy-MM-dd'));
+    setCalendarViewYear(newTarget.getFullYear());
+    setCalendarViewMonth(newTarget.getMonth());
+  };
+
+  const handleSelectCalendarDay = (day: Date) => {
+    const weekStart = startOfWeek(day, { weekStartsOn: 1 });
+    setTargetWeekDate(weekStart);
+    setCopyTargetDate(format(copyType === 'WEEK' ? weekStart : day, 'yyyy-MM-dd'));
+    if (day.getMonth() !== calendarViewMonth) {
+      setCalendarViewMonth(day.getMonth());
+      setCalendarViewYear(day.getFullYear());
+    }
   };
 
   // 1-Click Copy Current Week to Next Week
@@ -1283,10 +1411,27 @@ export default function Home() {
             onClick={() => setCopyModalOpen(true)}
             disabled={loading || employees.length === 0}
             className="btn btn-secondary"
-            title="Copy schedule between weeks or days"
+            title="Copy or paste schedule between weeks or days"
           >
-            <Copy size={16} /> Copy
+            <Copy size={16} /> Copy / Paste
           </button>
+
+          {copiedWeekBuffer && (
+            <button
+              onClick={() => handlePasteWeekFromBuffer(start)}
+              disabled={loading || copying}
+              className="btn"
+              style={{
+                background: 'rgba(56, 189, 248, 0.18)',
+                color: '#38bdf8',
+                border: '1px solid rgba(56, 189, 248, 0.4)',
+                boxShadow: '0 0 12px rgba(56, 189, 248, 0.25)',
+              }}
+              title={`Paste ${copiedWeekBuffer.count} shifts copied from week of ${format(new Date(copiedWeekBuffer.sourceStart), 'MMM d')} into this week`}
+            >
+              <ClipboardPaste size={16} /> Paste Week ({format(new Date(copiedWeekBuffer.sourceStart), 'MMM d')})
+            </button>
+          )}
 
           <button
             onClick={generateShifts}
@@ -2042,81 +2187,378 @@ export default function Home() {
       {/* COPY SHIFTS MODAL */}
       {copyModalOpen && (
         <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) setCopyModalOpen(false); }}>
-          <div className="modal-content" style={{ maxWidth: '520px' }}>
+          <div className="modal-content" style={{ maxWidth: '720px' }}>
             <div className="modal-header">
-              <h2><Copy size={18} /> Copy Shifts</h2>
+              <h2><Copy size={18} /> Copy & Paste Schedule</h2>
               <button onClick={() => setCopyModalOpen(false)} style={{ color: 'var(--slate-400)' }}>
                 <X size={20} />
               </button>
             </div>
 
-            <div className="modal-body">
-              {/* Quick 1-Click Fast Copy */}
-              <div style={{ background: 'rgba(56, 189, 248, 0.08)', border: '1px solid rgba(56, 189, 248, 0.25)', padding: '0.85rem 1rem', borderRadius: 'var(--radius)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', marginBottom: '0.5rem' }}>
-                <div>
-                  <div style={{ fontWeight: 600, color: '#e0f2fe', fontSize: '0.85rem' }}>⚡ 1-Click Copy to Next Week</div>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--slate-400)' }}>
-                    Copy all shifts to the week of {format(addWeeks(start, 1), 'MMM d, yyyy')}
+            <div className="modal-body" style={{ maxHeight: '82vh', overflowY: 'auto' }}>
+              {/* 1. CLIPBOARD COPY / PASTE HUB */}
+              <div style={{ background: 'rgba(15, 23, 42, 0.65)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '0.85rem 1rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    {copiedWeekBuffer ? (
+                      <ClipboardCheck size={20} style={{ color: '#38bdf8' }} />
+                    ) : (
+                      <ClipboardCopy size={20} style={{ color: 'var(--slate-400)' }} />
+                    )}
+                    <div>
+                      <div style={{ fontWeight: 700, color: 'white', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                        Clipboard Memory
+                        {copiedWeekBuffer && (
+                          <span style={{ fontSize: '0.7rem', padding: '0.1rem 0.4rem', borderRadius: 4, background: 'rgba(56, 189, 248, 0.2)', color: '#38bdf8', border: '1px solid rgba(56, 189, 248, 0.3)' }}>
+                            Active ({copiedWeekBuffer.count} shifts)
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: '0.72rem', color: 'var(--slate-400)' }}>
+                        {copiedWeekBuffer
+                          ? `Week of ${format(new Date(copiedWeekBuffer.sourceStart), 'MMM d, yyyy')} is ready to paste.`
+                          : 'Copy any week into memory to paste across any week in 1 click.'}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      style={{ padding: '0.35rem 0.7rem', fontSize: '0.75rem' }}
+                      onClick={handleCopyWeekToBuffer}
+                      title="Copy currently viewed week into clipboard"
+                    >
+                      <ClipboardCopy size={13} /> Copy Active Week ({format(start, 'MMM d')})
+                    </button>
+                    {copiedWeekBuffer && (
+                      <>
+                        <button
+                          type="button"
+                          className="btn btn-primary"
+                          style={{ padding: '0.35rem 0.7rem', fontSize: '0.75rem' }}
+                          onClick={() => handlePasteWeekFromBuffer(start)}
+                          disabled={copying}
+                          title="Paste copied week into currently viewed week"
+                        >
+                          <ClipboardPaste size={13} /> Paste to Active
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          style={{ padding: '0.35rem 0.5rem', fontSize: '0.75rem' }}
+                          onClick={handleClearWeekBuffer}
+                          title="Clear clipboard"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  style={{ whiteSpace: 'nowrap', padding: '0.45rem 0.85rem', fontSize: '0.8rem' }}
-                  onClick={handleCopyCurrentWeekToNextWeek}
-                  disabled={copying}
-                >
-                  <Repeat size={14} /> Copy to Next Week
-                </button>
               </div>
 
-              <div>
-                <label className="label">Copy Scope</label>
-                <div className="loc-toggle">
-                  <button
-                    className={copyType === 'WEEK' ? 'active-OFFICE' : ''}
-                    onClick={() => setCopyType('WEEK')}
-                  >
-                    Entire Week
-                  </button>
-                  <button
-                    className={copyType === 'DAY' ? 'active-HOME' : ''}
-                    onClick={() => setCopyType('DAY')}
-                  >
-                    Single Day
-                  </button>
-                </div>
-              </div>
+              {/* 2. INTERACTIVE CALENDAR WEEK SELECTOR (DAY / MONTH / YEAR) */}
+              {(() => {
+                const firstDay = new Date(calendarViewYear, calendarViewMonth, 1);
+                const gridStart = startOfWeek(firstDay, { weekStartsOn: 1 });
+                const calendarWeeks: Date[][] = [];
+                for (let w = 0; w < 6; w++) {
+                  const week: Date[] = [];
+                  for (let d = 0; d < 7; d++) {
+                    week.push(addDays(gridStart, w * 7 + d));
+                  }
+                  if (w < 5 || week.some(d => d.getMonth() === calendarViewMonth)) {
+                    calendarWeeks.push(week);
+                  }
+                }
+                const monthNames = [
+                  'January', 'February', 'March', 'April', 'May', 'June',
+                  'July', 'August', 'September', 'October', 'November', 'December'
+                ];
+                const currentYear = new Date().getFullYear();
+                const years = Array.from({ length: 8 }, (_, i) => currentYear - 2 + i);
 
-              <div style={{ display: 'flex', gap: '1rem' }}>
-                <div style={{ flex: 1 }}>
-                  <label className="label">Source {copyType === 'WEEK' ? '(Week of)' : '(Date)'}</label>
-                  <input
-                    type="date"
-                    className="input"
-                    value={copySourceDate}
-                    onChange={e => setCopySourceDate(e.target.value)}
-                  />
+                return (
+                  <div style={{ background: 'rgba(30, 41, 59, 0.45)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '0.9rem', marginTop: '0.75rem' }}>
+                    {/* Header Controls (Month / Year / Prev / Next) */}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          style={{ padding: '0.3rem 0.55rem' }}
+                          onClick={handlePrevMonth}
+                          title="Previous month"
+                        >
+                          <ChevronLeft size={15} />
+                        </button>
+
+                        {/* Month Selector */}
+                        <select
+                          className="input"
+                          style={{ width: '130px', padding: '0.35rem 0.5rem', fontSize: '0.82rem', fontWeight: 600 }}
+                          value={calendarViewMonth}
+                          onChange={e => setCalendarViewMonth(Number(e.target.value))}
+                        >
+                          {monthNames.map((m, idx) => (
+                            <option key={idx} value={idx}>{m}</option>
+                          ))}
+                        </select>
+
+                        {/* Year Selector */}
+                        <select
+                          className="input"
+                          style={{ width: '90px', padding: '0.35rem 0.5rem', fontSize: '0.82rem', fontWeight: 600 }}
+                          value={calendarViewYear}
+                          onChange={e => setCalendarViewYear(Number(e.target.value))}
+                        >
+                          {years.map(y => (
+                            <option key={y} value={y}>{y}</option>
+                          ))}
+                        </select>
+
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          style={{ padding: '0.3rem 0.55rem' }}
+                          onClick={handleNextMonth}
+                          title="Next month"
+                        >
+                          <ChevronRight size={15} />
+                        </button>
+
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          style={{ padding: '0.35rem 0.65rem', fontSize: '0.75rem' }}
+                          onClick={() => {
+                            const now = new Date();
+                            setCalendarViewMonth(now.getMonth());
+                            setCalendarViewYear(now.getFullYear());
+                          }}
+                        >
+                          This Month
+                        </button>
+                      </div>
+
+                      {/* Week Jump Presets */}
+                      <div style={{ display: 'flex', gap: '0.3rem' }}>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          style={{ padding: '0.3rem 0.55rem', fontSize: '0.72rem' }}
+                          onClick={() => selectWeekPreset(1)}
+                        >
+                          +1 Wk (Next)
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          style={{ padding: '0.3rem 0.55rem', fontSize: '0.72rem' }}
+                          onClick={() => selectWeekPreset(2)}
+                        >
+                          +2 Wks
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          style={{ padding: '0.3rem 0.55rem', fontSize: '0.72rem' }}
+                          onClick={() => selectWeekPreset(3)}
+                        >
+                          +3 Wks
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          style={{ padding: '0.3rem 0.55rem', fontSize: '0.72rem' }}
+                          onClick={() => selectWeekPreset(4)}
+                        >
+                          +4 Wks
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Interactive Calendar Days Grid */}
+                    <div style={{ overflowX: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: '0 3px', fontSize: '0.8rem' }}>
+                        <thead>
+                          <tr>
+                            <th style={{ padding: '0.25rem 0.3rem', color: 'var(--slate-400)', fontWeight: 600, fontSize: '0.7rem', textAlign: 'center', width: '45px' }}>Wk</th>
+                            {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(dayName => (
+                              <th key={dayName} style={{ padding: '0.25rem 0.3rem', color: 'var(--slate-400)', fontWeight: 600, fontSize: '0.72rem', textAlign: 'center' }}>
+                                {dayName}
+                              </th>
+                            ))}
+                            <th style={{ padding: '0.25rem 0.3rem', color: 'var(--slate-400)', fontWeight: 600, fontSize: '0.7rem', textAlign: 'center', width: '75px' }}>Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {calendarWeeks.map((week, wIdx) => {
+                            const weekStart = week[0];
+                            const isTarget = isSameDay(weekStart, targetWeekDate);
+                            const isSource = isSameDay(weekStart, start);
+
+                            return (
+                              <tr
+                                key={wIdx}
+                                onClick={() => handleSelectCalendarDay(weekStart)}
+                                style={{
+                                  cursor: 'pointer',
+                                  background: isTarget
+                                    ? 'rgba(59, 130, 246, 0.25)'
+                                    : isSource
+                                    ? 'rgba(245, 158, 11, 0.12)'
+                                    : 'rgba(30, 41, 59, 0.25)',
+                                  outline: isTarget
+                                    ? '2px solid var(--primary)'
+                                    : isSource
+                                    ? '1px dashed rgba(245, 158, 11, 0.6)'
+                                    : '1px solid rgba(51, 65, 85, 0.3)',
+                                  borderRadius: '6px',
+                                  transition: 'all 0.15s ease',
+                                }}
+                              >
+                                <td style={{ textAlign: 'center', fontSize: '0.68rem', color: 'var(--slate-400)', fontWeight: 600, padding: '0.4rem 0.2rem' }}>
+                                  #{wIdx + 1}
+                                </td>
+                                {week.map((day, dIdx) => {
+                                  const inCurrentMonth = day.getMonth() === calendarViewMonth;
+                                  const isToday = isSameDay(day, new Date());
+                                  return (
+                                    <td
+                                      key={dIdx}
+                                      style={{
+                                        textAlign: 'center',
+                                        padding: '0.4rem 0.2rem',
+                                        fontWeight: isTarget ? 700 : inCurrentMonth ? 500 : 400,
+                                        color: isTarget
+                                          ? 'white'
+                                          : inCurrentMonth
+                                          ? 'var(--slate-200)'
+                                          : 'var(--slate-600)',
+                                      }}
+                                    >
+                                      <span>{day.getDate()}</span>
+                                      {isToday && (
+                                        <div style={{ width: 4, height: 4, borderRadius: '50%', background: '#38bdf8', margin: '2px auto 0' }} />
+                                      )}
+                                    </td>
+                                  );
+                                })}
+                                <td style={{ textAlign: 'center', padding: '0.25rem 0.3rem' }}>
+                                  {isTarget && (
+                                    <span style={{ fontSize: '0.65rem', fontWeight: 700, padding: '0.12rem 0.4rem', borderRadius: 4, background: 'var(--primary)', color: 'white' }}>
+                                      Target
+                                    </span>
+                                  )}
+                                  {isSource && !isTarget && (
+                                    <span style={{ fontSize: '0.65rem', fontWeight: 700, padding: '0.12rem 0.4rem', borderRadius: 4, background: 'rgba(245, 158, 11, 0.3)', color: '#fbbf24' }}>
+                                      Source
+                                    </span>
+                                  )}
+                                  {!isTarget && !isSource && (
+                                    <span style={{ fontSize: '0.65rem', color: 'var(--slate-500)' }}>
+                                      Click
+                                    </span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <div style={{ fontSize: '0.72rem', color: 'var(--slate-400)', marginTop: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <span>Click any week row to choose it as your target copy destination.</span>
+                      <span style={{ color: 'var(--slate-300)' }}>{monthNames[calendarViewMonth]} {calendarViewYear}</span>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* 3. SOURCE & TARGET SUMMARY */}
+              <div style={{ marginTop: '0.85rem', background: 'rgba(15, 23, 42, 0.5)', padding: '0.85rem 1rem', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.75rem' }}>
+                  <div>
+                    <div style={{ fontSize: '0.72rem', color: 'var(--slate-400)', textTransform: 'uppercase', fontWeight: 700 }}>Source Week</div>
+                    <div style={{ fontSize: '0.88rem', fontWeight: 700, color: '#fbbf24' }}>
+                      {format(new Date(copySourceDate || start), 'MMM d, yyyy')} – {format(addDays(new Date(copySourceDate || start), 4), 'MMM d, yyyy')}
+                    </div>
+                    <div style={{ fontSize: '0.72rem', color: 'var(--slate-400)' }}>{shifts.length} active shift(s)</div>
+                  </div>
+
+                  <div style={{ fontSize: '1.25rem', color: 'var(--slate-500)' }}>➔</div>
+
+                  <div>
+                    <div style={{ fontSize: '0.72rem', color: 'var(--slate-400)', textTransform: 'uppercase', fontWeight: 700 }}>Target Week</div>
+                    <div style={{ fontSize: '0.88rem', fontWeight: 700, color: '#60a5fa' }}>
+                      {format(targetWeekDate, 'MMM d, yyyy')} – {format(addDays(targetWeekDate, 4), 'MMM d, yyyy')}
+                    </div>
+                    <div style={{ fontSize: '0.72rem', color: 'var(--slate-400)' }}>Will receive copied schedule</div>
+                  </div>
                 </div>
-                <div style={{ flex: 1 }}>
-                  <label className="label">Target {copyType === 'WEEK' ? '(Week of)' : '(Date)'}</label>
-                  <input
-                    type="date"
-                    className="input"
-                    value={copyTargetDate}
-                    onChange={e => setCopyTargetDate(e.target.value)}
-                  />
+
+                <div style={{ marginTop: '0.75rem', paddingTop: '0.65rem', borderTop: '1px solid rgba(51, 65, 85, 0.4)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.78rem', color: 'var(--slate-300)', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={jumpAfterCopy}
+                      onChange={e => setJumpAfterCopy(e.target.checked)}
+                      style={{ accentColor: 'var(--primary)', width: 15, height: 15 }}
+                    />
+                    Automatically navigate to target week after copy
+                  </label>
+
+                  <div style={{ display: 'flex', gap: '0.4rem' }}>
+                    <button
+                      type="button"
+                      className={`btn ${copyType === 'WEEK' ? 'btn-primary' : 'btn-secondary'}`}
+                      style={{ padding: '0.25rem 0.6rem', fontSize: '0.72rem' }}
+                      onClick={() => setCopyType('WEEK')}
+                    >
+                      Entire Week
+                    </button>
+                    <button
+                      type="button"
+                      className={`btn ${copyType === 'DAY' ? 'btn-primary' : 'btn-secondary'}`}
+                      style={{ padding: '0.25rem 0.6rem', fontSize: '0.72rem' }}
+                      onClick={() => setCopyType('DAY')}
+                    >
+                      Single Day
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
 
-            <div className="modal-footer">
+            <div className="modal-footer" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <button className="btn btn-secondary" onClick={() => setCopyModalOpen(false)} disabled={copying}>
                 Cancel
               </button>
-              <button className="btn btn-primary" onClick={handleCopyShifts} disabled={copying}>
-                {copying ? 'Copying...' : 'Copy Shifts'}
-              </button>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                {copiedWeekBuffer && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => handlePasteWeekFromBuffer(targetWeekDate)}
+                    disabled={copying}
+                    title="Paste clipboard week onto selected calendar target"
+                  >
+                    <ClipboardPaste size={15} /> Paste Clipboard to Target
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={handleCopyShifts}
+                  disabled={copying}
+                >
+                  <Copy size={15} /> {copying ? 'Copying...' : `Copy Week to Target (${format(targetWeekDate, 'MMM d')})`}
+                </button>
+              </div>
             </div>
           </div>
         </div>
