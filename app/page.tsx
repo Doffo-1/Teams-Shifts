@@ -44,6 +44,8 @@ import {
   CheckCircle2,
   Package,
   HardDrive,
+  CalendarCheck,
+  Repeat,
 } from 'lucide-react';
 
 
@@ -94,6 +96,8 @@ interface Employee {
   isActive: boolean;
   allowedLocation: string; // 'ANY' | 'HOME_ONLY' | 'OFFICE_ONLY'
   fixedOffDays: string;    // JSON array of day numbers: e.g. [5] for Friday
+  fixedDaySchedule?: string; // JSON map of day numbers to fixed schedule config
+  breakMinutes?: number | null; // Custom break minutes override (null = use team default)
   maxOfficeDays?: number | null;
   maxLateShifts?: number | null;
   autoSchedule: boolean;
@@ -228,6 +232,11 @@ export default function Home() {
   const [teamFormName, setTeamFormName] = useState('');
   const [teamFormExportGroup, setTeamFormExportGroup] = useState('');
   const [teamFormBreak, setTeamFormBreak] = useState(30);
+  const [teamFormEarlyStart, setTeamFormEarlyStart] = useState('07:30');
+  const [teamFormEarlyEnd, setTeamFormEarlyEnd] = useState('16:00');
+  const [teamFormLateStart, setTeamFormLateStart] = useState('09:30');
+  const [teamFormLateEnd, setTeamFormLateEnd] = useState('18:00');
+  const [applyingFixed, setApplyingFixed] = useState(false);
 
   // Toast State
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
@@ -455,6 +464,10 @@ export default function Home() {
           name: teamFormName.trim(),
           exportGroupName: teamFormExportGroup.trim() || teamFormName.trim(),
           breakMinutes: teamFormBreak,
+          earlyStart: teamFormEarlyStart.trim(),
+          earlyEnd: teamFormEarlyEnd.trim(),
+          lateStart: teamFormLateStart.trim(),
+          lateEnd: teamFormLateEnd.trim(),
         }),
       });
       if (res.ok) {
@@ -488,6 +501,10 @@ export default function Home() {
           name: teamFormName.trim(),
           exportGroupName: teamFormExportGroup.trim(),
           breakMinutes: teamFormBreak,
+          earlyStart: teamFormEarlyStart.trim(),
+          earlyEnd: teamFormEarlyEnd.trim(),
+          lateStart: teamFormLateStart.trim(),
+          lateEnd: teamFormLateEnd.trim(),
         }),
       });
       if (res.ok) {
@@ -758,6 +775,68 @@ export default function Home() {
     setCopying(false);
   };
 
+  // 1-Click Copy Current Week to Next Week
+  const handleCopyCurrentWeekToNextWeek = async () => {
+    const teamId = selectedTeamId || currentTeam?.id;
+    if (!teamId) return;
+    setCopying(true);
+    try {
+      const nextWeekStart = addWeeks(start, 1);
+      const res = await fetch('/api/shifts/copy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'WEEK',
+          sourceDate: start.toISOString(),
+          targetDate: nextWeekStart.toISOString(),
+          teamId,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setCopyModalOpen(false);
+        showToast(`Copied ${data.count || 0} shifts to next week!`);
+        setCurrentDate(nextWeekStart);
+      } else {
+        const data = await res.json();
+        showToast(data.error || 'Failed to copy shifts', 'error');
+      }
+    } catch (err) {
+      console.error(err);
+      showToast('Error copying shifts', 'error');
+    }
+    setCopying(false);
+  };
+
+  // Apply Fixed Days to Current Week
+  const handleApplyFixedDays = async () => {
+    const teamId = selectedTeamId || currentTeam?.id;
+    if (!teamId) return;
+    setApplyingFixed(true);
+    try {
+      const res = await fetch('/api/shifts/apply-fixed', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          date: currentDate.toISOString(),
+          teamId,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        await loadData();
+        showToast(`Applied fixed schedules: ${data.count || 0} shift(s) set for this week!`);
+      } else {
+        const data = await res.json();
+        showToast(data.error || 'Failed to apply fixed days', 'error');
+      }
+    } catch (err) {
+      console.error(err);
+      showToast('Error applying fixed days', 'error');
+    }
+    setApplyingFixed(false);
+  };
+
   // Import Excel
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -795,9 +874,13 @@ export default function Home() {
   const getShiftTimeText = (shift: Shift) => {
     if (shift.type === 'SICK') return 'Sick Leave';
     if (shift.type === 'VACATION') return 'Vacation';
-    if (shift.type === 'EARLY') return '07:30 - 16:00';
-    if (shift.type === 'LATE') return '09:30 - 18:00';
+    const earlySt = currentTeam?.shiftTypes?.find(st => st.code === 'EARLY');
+    const lateSt = currentTeam?.shiftTypes?.find(st => st.code === 'LATE');
+    if (shift.type === 'EARLY') return `${earlySt?.defaultStart || '07:30'} - ${earlySt?.defaultEnd || '16:00'}`;
+    if (shift.type === 'LATE') return `${lateSt?.defaultStart || '09:30'} - ${lateSt?.defaultEnd || '18:00'}`;
     if (shift.type === 'CUSTOM') return `${shift.customStart || '08:30'} - ${shift.customEnd || '17:00'}`;
+    const customSt = currentTeam?.shiftTypes?.find(st => st.code === shift.type);
+    if (customSt) return `${customSt.defaultStart} - ${customSt.defaultEnd}`;
     return 'OFF';
   };
 
@@ -1127,6 +1210,12 @@ export default function Home() {
                         setTeamFormName(currentTeam.name);
                         setTeamFormExportGroup(currentTeam.exportGroupName);
                         setTeamFormBreak(currentTeam.breakMinutes || 30);
+                        const earlySt = currentTeam.shiftTypes?.find(st => st.code === 'EARLY');
+                        const lateSt = currentTeam.shiftTypes?.find(st => st.code === 'LATE');
+                        setTeamFormEarlyStart(earlySt?.defaultStart || '07:30');
+                        setTeamFormEarlyEnd(earlySt?.defaultEnd || '16:00');
+                        setTeamFormLateStart(lateSt?.defaultStart || '09:30');
+                        setTeamFormLateEnd(lateSt?.defaultEnd || '18:00');
                       }
                       setTeamSettingsModalOpen(true);
                     }}
@@ -1179,6 +1268,15 @@ export default function Home() {
             title="Configure scheduling rules, attendance targets, and member constraints"
           >
             <Sliders size={16} style={{ color: '#a855f7' }} /> Rules Engine
+          </button>
+
+          <button
+            onClick={handleApplyFixedDays}
+            disabled={loading || applyingFixed || employees.length === 0}
+            className="btn btn-secondary"
+            title="Apply recurring fixed days (Off, Office, Home, Custom) to this week"
+          >
+            <CalendarCheck size={16} style={{ color: '#38bdf8' }} /> {applyingFixed ? 'Applying...' : 'Apply Fixed Days'}
           </button>
 
           <button
@@ -1333,14 +1431,18 @@ export default function Home() {
                   onClick={() => setModalData({ ...modalData, type: 'EARLY' })}
                 >
                   <span className="title">Early</span>
-                  <span className="sub">07:30 - 16:00</span>
+                  <span className="sub">
+                    {currentTeam?.shiftTypes?.find(st => st.code === 'EARLY')?.defaultStart || '07:30'} - {currentTeam?.shiftTypes?.find(st => st.code === 'EARLY')?.defaultEnd || '16:00'}
+                  </span>
                 </button>
                 <button
                   className={`type-btn ${modalData.type === 'LATE' ? 'active-LATE' : ''}`}
                   onClick={() => setModalData({ ...modalData, type: 'LATE' })}
                 >
                   <span className="title">Late</span>
-                  <span className="sub">09:30 - 18:00</span>
+                  <span className="sub">
+                    {currentTeam?.shiftTypes?.find(st => st.code === 'LATE')?.defaultStart || '09:30'} - {currentTeam?.shiftTypes?.find(st => st.code === 'LATE')?.defaultEnd || '18:00'}
+                  </span>
                 </button>
                 <button
                   className={`type-btn ${modalData.type === 'CUSTOM' ? 'active-CUSTOM' : ''}`}
@@ -1574,6 +1676,7 @@ export default function Home() {
         <MemberEditModal
           employee={memberEditModalOpen}
           teamGroups={teamGroups}
+          teamBreakMinutes={currentTeam?.breakMinutes || 30}
           onClose={() => setMemberEditModalOpen(null)}
           onSave={saveMemberConstraints}
         />
@@ -1856,11 +1959,61 @@ export default function Home() {
                   <input
                     type="number"
                     min="0"
-                    max="120"
+                    max="180"
                     className="input"
                     value={teamFormBreak}
                     onChange={e => setTeamFormBreak(Number(e.target.value))}
                   />
+                  <div style={{ fontSize: '0.75rem', color: 'var(--slate-400)', marginTop: '0.25rem' }}>
+                    Default break duration for all team shifts (can be overridden per person).
+                  </div>
+                </div>
+
+                <div style={{ background: 'rgba(30, 41, 59, 0.4)', padding: '0.85rem 1rem', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--slate-200)', marginBottom: '0.65rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <Clock size={15} style={{ color: 'var(--primary)' }} />
+                    Default Shift Hours
+                  </div>
+                  <div className="form-grid">
+                    <div>
+                      <label className="label" style={{ fontSize: '0.75rem' }}>Early Shift Start</label>
+                      <input
+                        type="time"
+                        className="input"
+                        value={teamFormEarlyStart}
+                        onChange={e => setTeamFormEarlyStart(e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label className="label" style={{ fontSize: '0.75rem' }}>Early Shift End</label>
+                      <input
+                        type="time"
+                        className="input"
+                        value={teamFormEarlyEnd}
+                        onChange={e => setTeamFormEarlyEnd(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                  <div className="form-grid" style={{ marginTop: '0.6rem' }}>
+                    <div>
+                      <label className="label" style={{ fontSize: '0.75rem' }}>Late Shift Start</label>
+                      <input
+                        type="time"
+                        className="input"
+                        value={teamFormLateStart}
+                        onChange={e => setTeamFormLateStart(e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label className="label" style={{ fontSize: '0.75rem' }}>Late Shift End</label>
+                      <input
+                        type="time"
+                        className="input"
+                        value={teamFormLateEnd}
+                        onChange={e => setTeamFormLateEnd(e.target.value)}
+                      />
+                    </div>
+                  </div>
                 </div>
               </div>
               <div className="modal-footer">
@@ -1898,6 +2051,25 @@ export default function Home() {
             </div>
 
             <div className="modal-body">
+              {/* Quick 1-Click Fast Copy */}
+              <div style={{ background: 'rgba(56, 189, 248, 0.08)', border: '1px solid rgba(56, 189, 248, 0.25)', padding: '0.85rem 1rem', borderRadius: 'var(--radius)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', marginBottom: '0.5rem' }}>
+                <div>
+                  <div style={{ fontWeight: 600, color: '#e0f2fe', fontSize: '0.85rem' }}>⚡ 1-Click Copy to Next Week</div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--slate-400)' }}>
+                    Copy all shifts to the week of {format(addWeeks(start, 1), 'MMM d, yyyy')}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  style={{ whiteSpace: 'nowrap', padding: '0.45rem 0.85rem', fontSize: '0.8rem' }}
+                  onClick={handleCopyCurrentWeekToNextWeek}
+                  disabled={copying}
+                >
+                  <Repeat size={14} /> Copy to Next Week
+                </button>
+              </div>
+
               <div>
                 <label className="label">Copy Scope</label>
                 <div className="loc-toggle">
@@ -2567,7 +2739,8 @@ function RulesModal({
                   <tr>
                     <th>Member</th>
                     <th>Allowed Location</th>
-                    <th>Fixed Days Off</th>
+                    <th>Fixed Schedule</th>
+                    <th>Break</th>
                     <th>Max Office</th>
                     <th>Auto-Fill</th>
                   </tr>
@@ -2578,6 +2751,21 @@ function RulesModal({
                     try { fixedOffs = JSON.parse(emp.fixedOffDays || '[]'); } catch {}
                     const dayLabels = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
 
+                    let fixedSummary = '';
+                    try {
+                      if (emp.fixedDaySchedule) {
+                        const parsed = JSON.parse(emp.fixedDaySchedule);
+                        const parts: string[] = [];
+                        for (let d = 1; d <= 5; d++) {
+                          const p = parsed[d] || parsed[d.toString()];
+                          if (p && p.type && p.type !== 'AUTO') {
+                            parts.push(`${dayLabels[d]}: ${p.type === 'OFF' ? 'Off' : p.type === 'OFFICE' ? 'Offc' : p.type === 'HOME' ? 'Home' : 'Cust'}`);
+                          }
+                        }
+                        if (parts.length > 0) fixedSummary = parts.join(', ');
+                      }
+                    } catch {}
+
                     return (
                       <tr key={emp.id}>
                         <td style={{ fontWeight: 600, color: 'white' }}>{emp.name}</td>
@@ -2587,11 +2775,18 @@ function RulesModal({
                           </span>
                         </td>
                         <td>
-                          {fixedOffs.length > 0 ? (
+                          {fixedSummary ? (
+                            <span className="member-tag tag-office" style={{ fontSize: '0.75rem' }}>{fixedSummary}</span>
+                          ) : fixedOffs.length > 0 ? (
                             <span className="member-tag tag-off">{fixedOffs.map(d => dayLabels[d]).join(', ')}</span>
                           ) : (
-                            <span style={{ color: 'var(--slate-500)', fontSize: '0.75rem' }}>None</span>
+                            <span style={{ color: 'var(--slate-500)', fontSize: '0.75rem' }}>Flexible</span>
                           )}
+                        </td>
+                        <td>
+                          <span style={{ color: emp.breakMinutes != null ? '#38bdf8' : 'var(--slate-400)', fontSize: '0.8rem', fontWeight: emp.breakMinutes != null ? 700 : 400 }}>
+                            {emp.breakMinutes != null ? `${emp.breakMinutes}m` : `${team.breakMinutes || 30}m`}
+                          </span>
                         </td>
                         <td>
                           {emp.maxOfficeDays !== null && emp.maxOfficeDays !== undefined ? (
@@ -2706,21 +2901,32 @@ function RulesModal({
 }
 
 // MEMBER EDIT MODAL COMPONENT
+interface DayPattern {
+  type: 'AUTO' | 'OFF' | 'OFFICE' | 'HOME' | 'CUSTOM';
+  shiftType?: 'EARLY' | 'LATE';
+  start?: string;
+  end?: string;
+  location?: string;
+  notes?: string;
+}
+
 function MemberEditModal({
   employee,
   teamGroups,
+  teamBreakMinutes = 30,
   onClose,
   onSave,
 }: {
   employee: Employee;
   teamGroups: { id: string; name: string }[];
+  teamBreakMinutes?: number;
   onClose: () => void;
   onSave: (emp: Employee) => void;
 }) {
   const [allowedLocation, setAllowedLocation] = useState(employee.allowedLocation || 'ANY');
-  const [fixedOffDays, setFixedOffDays] = useState<number[]>(() => {
-    try { return JSON.parse(employee.fixedOffDays || '[]'); } catch { return []; }
-  });
+  const [breakMinutes, setBreakMinutes] = useState<string>(
+    employee.breakMinutes !== null && employee.breakMinutes !== undefined ? String(employee.breakMinutes) : ''
+  );
   const [maxOfficeDays, setMaxOfficeDays] = useState<string>(
     employee.maxOfficeDays !== null && employee.maxOfficeDays !== undefined ? String(employee.maxOfficeDays) : ''
   );
@@ -2730,19 +2936,79 @@ function MemberEditModal({
   const [autoSchedule, setAutoSchedule] = useState(employee.autoSchedule !== false);
   const [group, setGroup] = useState(employee.group || 'DEFAULT');
 
-  const toggleOffDay = (dayNum: number) => {
-    if (fixedOffDays.includes(dayNum)) {
-      setFixedOffDays(fixedOffDays.filter(d => d !== dayNum));
-    } else {
-      setFixedOffDays([...fixedOffDays, dayNum]);
+  // Recurring Fixed Day Patterns (1..5: Mon..Fri)
+  const [selectedDayTab, setSelectedDayTab] = useState<number>(1);
+  const [schedulePatterns, setSchedulePatterns] = useState<Record<number, DayPattern>>(() => {
+    const initial: Record<number, DayPattern> = {
+      1: { type: 'AUTO' },
+      2: { type: 'AUTO' },
+      3: { type: 'AUTO' },
+      4: { type: 'AUTO' },
+      5: { type: 'AUTO' },
+    };
+    try {
+      if (employee.fixedDaySchedule) {
+        const parsed = JSON.parse(employee.fixedDaySchedule);
+        for (let d = 1; d <= 5; d++) {
+          if (parsed[d] || parsed[d.toString()]) {
+            initial[d] = parsed[d] || parsed[d.toString()];
+          }
+        }
+      }
+    } catch {}
+
+    // Check legacy fixedOffDays if day is still AUTO
+    try {
+      if (employee.fixedOffDays) {
+        const legacyOffs = JSON.parse(employee.fixedOffDays);
+        if (Array.isArray(legacyOffs)) {
+          for (const d of legacyOffs) {
+            if (initial[d]?.type === 'AUTO') {
+              initial[d] = { type: 'OFF' };
+            }
+          }
+        }
+      }
+    } catch {}
+
+    return initial;
+  });
+
+  const updateCurrentDayPattern = (updates: Partial<DayPattern>) => {
+    setSchedulePatterns(prev => ({
+      ...prev,
+      [selectedDayTab]: {
+        ...prev[selectedDayTab],
+        ...updates,
+      },
+    }));
+  };
+
+  const setAllDaysPattern = (type: 'AUTO' | 'OFFICE' | 'HOME' | 'OFF') => {
+    const updated: Record<number, DayPattern> = {};
+    for (let d = 1; d <= 5; d++) {
+      if (type === 'OFFICE') updated[d] = { type: 'OFFICE', shiftType: 'EARLY' };
+      else if (type === 'HOME') updated[d] = { type: 'HOME', shiftType: 'EARLY' };
+      else if (type === 'OFF') updated[d] = { type: 'OFF' };
+      else updated[d] = { type: 'AUTO' };
     }
+    setSchedulePatterns(updated);
   };
 
   const handleSave = () => {
+    const fixedOffs: number[] = [];
+    for (let d = 1; d <= 5; d++) {
+      if (schedulePatterns[d]?.type === 'OFF') {
+        fixedOffs.push(d);
+      }
+    }
+
     onSave({
       ...employee,
       allowedLocation,
-      fixedOffDays: JSON.stringify(fixedOffDays),
+      fixedOffDays: JSON.stringify(fixedOffs),
+      fixedDaySchedule: JSON.stringify(schedulePatterns),
+      breakMinutes: breakMinutes !== '' && breakMinutes !== null ? Number(breakMinutes) : null,
       maxOfficeDays: maxOfficeDays ? Number(maxOfficeDays) : null,
       maxLateShifts: maxLateShifts ? Number(maxLateShifts) : null,
       autoSchedule,
@@ -2750,85 +3016,329 @@ function MemberEditModal({
     });
   };
 
-  const dayOptions = [
-    { num: 1, label: 'Mon' },
-    { num: 2, label: 'Tue' },
-    { num: 3, label: 'Wed' },
-    { num: 4, label: 'Thu' },
-    { num: 5, label: 'Fri' },
+  const dayTabs = [
+    { num: 1, name: 'Monday', short: 'Mon' },
+    { num: 2, name: 'Tuesday', short: 'Tue' },
+    { num: 3, name: 'Wednesday', short: 'Wed' },
+    { num: 4, name: 'Thursday', short: 'Thu' },
+    { num: 5, name: 'Friday', short: 'Fri' },
   ];
+
+  const currentPattern = schedulePatterns[selectedDayTab] || { type: 'AUTO' };
 
   return (
     <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal-content" style={{ maxWidth: '540px' }}>
+      <div className="modal-content" style={{ maxWidth: '620px' }}>
         <div className="modal-header">
-          <h2><UserCheck size={18} /> Rules for {employee.name}</h2>
+          <h2><UserCheck size={18} /> Rules & Schedule for {employee.name}</h2>
           <button onClick={onClose} style={{ color: 'var(--slate-400)' }}>
             <X size={20} />
           </button>
         </div>
 
-        <div className="modal-body">
-          {/* Location Constraint */}
-          <div>
-            <label className="label">Allowed Work Location</label>
-            <div className="loc-toggle">
-              <button
-                type="button"
-                className={allowedLocation === 'ANY' ? 'active-OFFICE' : ''}
-                onClick={() => setAllowedLocation('ANY')}
-              >
-                Flexible (Any)
-              </button>
-              <button
-                type="button"
-                className={allowedLocation === 'HOME_ONLY' ? 'active-HOME' : ''}
-                onClick={() => setAllowedLocation('HOME_ONLY')}
-              >
-                Home Only
-              </button>
-              <button
-                type="button"
-                className={allowedLocation === 'OFFICE_ONLY' ? 'active-OFFICE' : ''}
-                onClick={() => setAllowedLocation('OFFICE_ONLY')}
-              >
-                Office Only
-              </button>
+        <div className="modal-body" style={{ maxHeight: '80vh', overflowY: 'auto' }}>
+          {/* General Constraints Grid */}
+          <div className="form-grid">
+            <div>
+              <label className="label">Allowed Work Location</label>
+              <div className="loc-toggle">
+                <button
+                  type="button"
+                  className={allowedLocation === 'ANY' ? 'active-OFFICE' : ''}
+                  onClick={() => setAllowedLocation('ANY')}
+                >
+                  Flexible
+                </button>
+                <button
+                  type="button"
+                  className={allowedLocation === 'HOME_ONLY' ? 'active-HOME' : ''}
+                  onClick={() => setAllowedLocation('HOME_ONLY')}
+                >
+                  Home
+                </button>
+                <button
+                  type="button"
+                  className={allowedLocation === 'OFFICE_ONLY' ? 'active-OFFICE' : ''}
+                  onClick={() => setAllowedLocation('OFFICE_ONLY')}
+                >
+                  Office
+                </button>
+              </div>
             </div>
-            <div style={{ fontSize: '0.75rem', color: 'var(--slate-400)', marginTop: '0.35rem' }}>
-              Setting "Home Only" ensures this member will never be scheduled at the Office by the Auto-Fill engine.
+
+            <div>
+              <label className="label">Break Duration (Minutes)</label>
+              <input
+                type="number"
+                min="0"
+                max="180"
+                placeholder={`Team default (${teamBreakMinutes}m)`}
+                className="input"
+                value={breakMinutes}
+                onChange={e => setBreakMinutes(e.target.value)}
+              />
+              <div style={{ fontSize: '0.725rem', color: 'var(--slate-400)', marginTop: '0.25rem' }}>
+                Per-person break duration override (blank = {teamBreakMinutes}m).
+              </div>
             </div>
           </div>
 
-          {/* Fixed Days Off */}
-          <div>
-            <label className="label">Fixed Days Off (Always OFF)</label>
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
-              {dayOptions.map(d => {
-                const isOff = fixedOffDays.includes(d.num);
+          {/* Weekly Fixed Schedule (Recurring Pattern) */}
+          <div style={{ background: 'rgba(30, 41, 59, 0.45)', padding: '1rem', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+              <div>
+                <div style={{ fontWeight: 600, color: 'white', fontSize: '0.875rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  <CalendarCheck size={16} style={{ color: 'var(--primary)' }} />
+                  Weekly Fixed Day Schedule
+                </div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--slate-400)' }}>
+                  Set fixed attendance/location per weekday or let Auto-Fill balance flexibly.
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: '0.35rem' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  style={{ padding: '0.25rem 0.55rem', fontSize: '0.7rem' }}
+                  onClick={() => setAllDaysPattern('AUTO')}
+                  title="Make all days flexible"
+                >
+                  All Auto
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  style={{ padding: '0.25rem 0.55rem', fontSize: '0.7rem' }}
+                  onClick={() => setAllDaysPattern('OFFICE')}
+                  title="Set all days to Office"
+                >
+                  All Office
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  style={{ padding: '0.25rem 0.55rem', fontSize: '0.7rem' }}
+                  onClick={() => setAllDaysPattern('HOME')}
+                  title="Set all days to Home"
+                >
+                  All Home
+                </button>
+              </div>
+            </div>
+
+            {/* Day Selector Tabs */}
+            <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.85rem' }}>
+              {dayTabs.map(d => {
+                const pat = schedulePatterns[d.num] || { type: 'AUTO' };
+                const isActive = selectedDayTab === d.num;
+                let badgeColor = 'var(--slate-400)';
+                let badgeBg = 'transparent';
+                let label = 'Auto';
+
+                if (pat.type === 'OFF') {
+                  badgeColor = '#fca5a5';
+                  badgeBg = 'rgba(239, 68, 68, 0.2)';
+                  label = 'Off';
+                } else if (pat.type === 'OFFICE') {
+                  badgeColor = '#93c5fd';
+                  badgeBg = 'rgba(59, 130, 246, 0.2)';
+                  label = pat.shiftType === 'LATE' ? 'Late' : 'Office';
+                } else if (pat.type === 'HOME') {
+                  badgeColor = '#c084fc';
+                  badgeBg = 'rgba(168, 85, 247, 0.2)';
+                  label = pat.shiftType === 'LATE' ? 'H-Late' : 'Home';
+                } else if (pat.type === 'CUSTOM') {
+                  badgeColor = '#f472b6';
+                  badgeBg = 'rgba(236, 72, 153, 0.2)';
+                  label = 'Custom';
+                }
+
                 return (
                   <button
                     key={d.num}
                     type="button"
-                    onClick={() => toggleOffDay(d.num)}
+                    onClick={() => setSelectedDayTab(d.num)}
                     style={{
                       flex: 1,
-                      padding: '0.55rem',
+                      padding: '0.55rem 0.25rem',
                       borderRadius: 'var(--radius)',
-                      fontWeight: 700,
-                      fontSize: '0.85rem',
-                      background: isOff ? 'rgba(239, 68, 68, 0.25)' : 'var(--slate-800)',
-                      color: isOff ? '#fca5a5' : 'var(--slate-300)',
-                      border: isOff ? '1px solid #ef4444' : '1px solid var(--border)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      gap: '0.25rem',
+                      background: isActive ? 'var(--primary)' : 'var(--slate-800)',
+                      color: isActive ? 'white' : 'var(--slate-300)',
+                      border: isActive ? '1px solid var(--primary)' : '1px solid var(--border)',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease',
                     }}
                   >
-                    {d.label}
+                    <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>{d.short}</span>
+                    <span
+                      style={{
+                        fontSize: '0.65rem',
+                        fontWeight: 600,
+                        padding: '0.1rem 0.35rem',
+                        borderRadius: '4px',
+                        background: isActive ? 'rgba(255,255,255,0.2)' : badgeBg,
+                        color: isActive ? 'white' : badgeColor,
+                      }}
+                    >
+                      {label}
+                    </span>
                   </button>
                 );
               })}
             </div>
-            <div style={{ fontSize: '0.75rem', color: 'var(--slate-400)', marginTop: '0.35rem' }}>
-              Auto-fill automatically marks the member as OFF on selected days.
+
+            {/* Selected Day Configuration Area */}
+            <div style={{ background: 'var(--slate-900)', padding: '0.85rem', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>
+              <div style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--slate-300)', marginBottom: '0.5rem' }}>
+                Schedule for {dayTabs.find(d => d.num === selectedDayTab)?.name}:
+              </div>
+
+              {/* Status Pills */}
+              <div className="loc-toggle" style={{ marginBottom: '0.75rem' }}>
+                <button
+                  type="button"
+                  className={currentPattern.type === 'AUTO' ? 'active-OFFICE' : ''}
+                  onClick={() => updateCurrentDayPattern({ type: 'AUTO' })}
+                >
+                  Flexible (Auto)
+                </button>
+                <button
+                  type="button"
+                  className={currentPattern.type === 'OFF' ? 'active-HOME' : ''}
+                  style={currentPattern.type === 'OFF' ? { background: '#ef4444', color: 'white', borderColor: '#ef4444' } : {}}
+                  onClick={() => updateCurrentDayPattern({ type: 'OFF' })}
+                >
+                  Day Off
+                </button>
+                <button
+                  type="button"
+                  className={currentPattern.type === 'OFFICE' ? 'active-OFFICE' : ''}
+                  onClick={() => updateCurrentDayPattern({ type: 'OFFICE', shiftType: currentPattern.shiftType || 'EARLY' })}
+                >
+                  Office
+                </button>
+                <button
+                  type="button"
+                  className={currentPattern.type === 'HOME' ? 'active-HOME' : ''}
+                  onClick={() => updateCurrentDayPattern({ type: 'HOME', shiftType: currentPattern.shiftType || 'EARLY' })}
+                >
+                  Home
+                </button>
+                <button
+                  type="button"
+                  className={currentPattern.type === 'CUSTOM' ? 'active-OFFICE' : ''}
+                  style={currentPattern.type === 'CUSTOM' ? { background: '#ec4899', color: 'white', borderColor: '#ec4899' } : {}}
+                  onClick={() => updateCurrentDayPattern({ type: 'CUSTOM', start: currentPattern.start || '08:30', end: currentPattern.end || '17:00' })}
+                >
+                  Custom
+                </button>
+              </div>
+
+              {/* Sub-options for OFFICE or HOME */}
+              {(currentPattern.type === 'OFFICE' || currentPattern.type === 'HOME') && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginTop: '0.5rem', background: 'rgba(15, 23, 42, 0.4)', padding: '0.6rem 0.8rem', borderRadius: 'var(--radius)' }}>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--slate-400)', fontWeight: 600 }}>Shift Timing:</span>
+                  <div style={{ display: 'flex', gap: '0.4rem', flex: 1 }}>
+                    <button
+                      type="button"
+                      style={{
+                        flex: 1,
+                        padding: '0.35rem 0.6rem',
+                        fontSize: '0.75rem',
+                        fontWeight: 600,
+                        borderRadius: 'var(--radius-sm)',
+                        background: (currentPattern.shiftType || 'EARLY') === 'EARLY' ? 'rgba(34, 197, 94, 0.25)' : 'var(--slate-800)',
+                        color: (currentPattern.shiftType || 'EARLY') === 'EARLY' ? '#86efac' : 'var(--slate-400)',
+                        border: (currentPattern.shiftType || 'EARLY') === 'EARLY' ? '1px solid #22c55e' : '1px solid var(--border)',
+                      }}
+                      onClick={() => updateCurrentDayPattern({ shiftType: 'EARLY' })}
+                    >
+                      Early Shift
+                    </button>
+                    <button
+                      type="button"
+                      style={{
+                        flex: 1,
+                        padding: '0.35rem 0.6rem',
+                        fontSize: '0.75rem',
+                        fontWeight: 600,
+                        borderRadius: 'var(--radius-sm)',
+                        background: currentPattern.shiftType === 'LATE' ? 'rgba(59, 130, 246, 0.25)' : 'var(--slate-800)',
+                        color: currentPattern.shiftType === 'LATE' ? '#93c5fd' : 'var(--slate-400)',
+                        border: currentPattern.shiftType === 'LATE' ? '1px solid #3b82f6' : '1px solid var(--border)',
+                      }}
+                      onClick={() => updateCurrentDayPattern({ shiftType: 'LATE' })}
+                    >
+                      Late Shift
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Sub-options for CUSTOM */}
+              {currentPattern.type === 'CUSTOM' && (
+                <div style={{ marginTop: '0.5rem', background: 'rgba(15, 23, 42, 0.4)', padding: '0.75rem', borderRadius: 'var(--radius)' }}>
+                  <div className="form-grid">
+                    <div>
+                      <label className="label" style={{ fontSize: '0.725rem' }}>Start Time</label>
+                      <input
+                        type="time"
+                        className="input"
+                        value={currentPattern.start || '08:30'}
+                        onChange={e => updateCurrentDayPattern({ start: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <label className="label" style={{ fontSize: '0.725rem' }}>End Time</label>
+                      <input
+                        type="time"
+                        className="input"
+                        value={currentPattern.end || '17:00'}
+                        onChange={e => updateCurrentDayPattern({ end: e.target.value })}
+                      />
+                    </div>
+                  </div>
+                  <div style={{ marginTop: '0.5rem' }}>
+                    <label className="label" style={{ fontSize: '0.725rem' }}>Location / Note</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Office, Site Visit, Remote..."
+                      className="input"
+                      value={currentPattern.location || ''}
+                      onChange={e => updateCurrentDayPattern({ location: e.target.value })}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Explanatory text */}
+              <div style={{ fontSize: '0.725rem', color: 'var(--slate-400)', marginTop: '0.5rem' }}>
+                {currentPattern.type === 'AUTO' && 'Auto-fill will flexibly assign this day based on team rules and weekly targets.'}
+                {currentPattern.type === 'OFF' && 'Employee will always be scheduled as OFF on this day.'}
+                {currentPattern.type === 'OFFICE' && `Employee will always be scheduled at the Office (${currentPattern.shiftType || 'EARLY'}).`}
+                {currentPattern.type === 'HOME' && `Employee will always work from Home (${currentPattern.shiftType || 'EARLY'}).`}
+                {currentPattern.type === 'CUSTOM' && `Employee will be scheduled with custom hours (${currentPattern.start || '08:30'} - ${currentPattern.end || '17:00'}).`}
+              </div>
+            </div>
+
+            {/* Weekly Summary Strip */}
+            <div style={{ marginTop: '0.75rem', padding: '0.4rem 0.6rem', background: 'rgba(15, 23, 42, 0.3)', borderRadius: 'var(--radius-sm)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.725rem', color: 'var(--slate-400)' }}>
+              <span style={{ fontWeight: 600 }}>Pattern Summary:</span>
+              <span style={{ color: 'var(--slate-300)' }}>
+                {dayTabs.map(d => {
+                  const p = schedulePatterns[d.num] || { type: 'AUTO' };
+                  let s = 'Auto';
+                  if (p.type === 'OFF') s = 'Off';
+                  else if (p.type === 'OFFICE') s = p.shiftType === 'LATE' ? 'Offc(L)' : 'Offc(E)';
+                  else if (p.type === 'HOME') s = p.shiftType === 'LATE' ? 'Home(L)' : 'Home(E)';
+                  else if (p.type === 'CUSTOM') s = 'Cust';
+                  return `${d.short}: ${s}`;
+                }).join(' • ')}
+              </span>
             </div>
           </div>
 
@@ -2917,7 +3427,7 @@ function MemberEditModal({
             Cancel
           </button>
           <button type="button" className="btn btn-primary" onClick={handleSave}>
-            Save Rules
+            Save Rules & Schedule
           </button>
         </div>
       </div>

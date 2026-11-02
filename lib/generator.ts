@@ -24,6 +24,8 @@ export interface GeneratorEmployee {
   isActive?: boolean;
   allowedLocation?: string; // 'ANY' | 'HOME_ONLY' | 'OFFICE_ONLY'
   fixedOffDays?: string;    // JSON array of day numbers: 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat, 0=Sun
+  fixedDaySchedule?: string; // JSON map of day numbers to fixed schedule config
+  breakMinutes?: number | null;
   maxOfficeDays?: number | null;
   maxLateShifts?: number | null;
   autoSchedule?: boolean;
@@ -138,23 +140,91 @@ export function generateWeeklySchedule(
     const currentDate = addDays(start, dayOffset);
     const dayIsoNum = dayOffset + 1; // 1=Mon, 2=Tue, ..., 7=Sun
 
-    // 1. Check fixed off days for each employee
+    // 1. Check fixed days schedule (or fixed off days) for each employee
     for (const emp of schedulableEmployees) {
-      let fixedOffs: number[] = [];
+      const alreadyHasShift = generatedShifts.some(
+        s => s.employeeId === emp.id && isSameDay(new Date(s.date), currentDate)
+      );
+      if (alreadyHasShift) continue;
+
+      let fixedSchedule: Record<string, any> = {};
       try {
-        if (emp.fixedOffDays) {
-          fixedOffs = JSON.parse(emp.fixedOffDays);
+        if (emp.fixedDaySchedule) {
+          fixedSchedule = JSON.parse(emp.fixedDaySchedule);
         }
       } catch {
-        fixedOffs = [];
+        fixedSchedule = {};
       }
 
-      if (fixedOffs.includes(dayIsoNum)) {
-        // If employee doesn't already have a manual shift today, assign them OFF
-        const alreadyHasShift = generatedShifts.some(
-          s => s.employeeId === emp.id && isSameDay(new Date(s.date), currentDate)
-        );
-        if (!alreadyHasShift) {
+      const dayConfig = fixedSchedule[dayIsoNum.toString()] || fixedSchedule[dayIsoNum];
+
+      if (dayConfig && dayConfig.type && dayConfig.type !== 'AUTO') {
+        const state = empState.get(emp.id)!;
+        if (dayConfig.type === 'OFF') {
+          generatedShifts.push({
+            employeeId: emp.id,
+            date: currentDate,
+            type: 'OFF',
+            location: 'HOME',
+            isManual: false,
+            notes: dayConfig.notes || 'Fixed day off',
+          });
+          newlyCreatedCount++;
+          state.offDays++;
+        } else if (dayConfig.type === 'OFFICE') {
+          const shiftType = dayConfig.shiftType && dayConfig.shiftType !== 'AUTO' ? dayConfig.shiftType : 'EARLY';
+          generatedShifts.push({
+            employeeId: emp.id,
+            date: currentDate,
+            type: shiftType,
+            location: 'OFFICE',
+            isManual: false,
+            notes: dayConfig.notes || 'Fixed office',
+          });
+          newlyCreatedCount++;
+          state.officeDays++;
+          if (shiftType === 'LATE') state.lateCount++;
+          else if (shiftType === 'EARLY') state.earlyCount++;
+        } else if (dayConfig.type === 'HOME') {
+          const shiftType = dayConfig.shiftType && dayConfig.shiftType !== 'AUTO' ? dayConfig.shiftType : 'EARLY';
+          generatedShifts.push({
+            employeeId: emp.id,
+            date: currentDate,
+            type: shiftType,
+            location: 'HOME',
+            isManual: false,
+            notes: dayConfig.notes || 'Fixed home',
+          });
+          newlyCreatedCount++;
+          if (shiftType === 'LATE') state.lateCount++;
+          else if (shiftType === 'EARLY') state.earlyCount++;
+        } else if (dayConfig.type === 'CUSTOM') {
+          const loc = dayConfig.location || 'OFFICE';
+          generatedShifts.push({
+            employeeId: emp.id,
+            date: currentDate,
+            type: 'CUSTOM',
+            location: loc,
+            customStart: dayConfig.start || '08:30',
+            customEnd: dayConfig.end || '17:00',
+            isManual: false,
+            notes: dayConfig.notes || 'Fixed custom',
+          });
+          newlyCreatedCount++;
+          if (loc !== 'HOME') state.officeDays++;
+        }
+      } else {
+        // Fallback to legacy fixedOffDays
+        let fixedOffs: number[] = [];
+        try {
+          if (emp.fixedOffDays) {
+            fixedOffs = JSON.parse(emp.fixedOffDays);
+          }
+        } catch {
+          fixedOffs = [];
+        }
+
+        if (fixedOffs.includes(dayIsoNum)) {
           generatedShifts.push({
             employeeId: emp.id,
             date: currentDate,

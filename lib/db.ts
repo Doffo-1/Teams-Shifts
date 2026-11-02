@@ -17,12 +17,29 @@ export async function ensureDefaultData() {
   isInitialized = true;
 
   try {
-    const tableInfo = (await prisma.$queryRawUnsafe(`PRAGMA table_info("Team")`)) as any[];
-    const hasGroups = tableInfo.some(col => col.name === 'groups');
-    if (!hasGroups) {
+    const teamInfo = (await prisma.$queryRawUnsafe(`PRAGMA table_info("Team")`)) as any[];
+    if (teamInfo && !teamInfo.some(col => col.name === 'groups')) {
       await prisma.$executeRawUnsafe(
         `ALTER TABLE "Team" ADD COLUMN "groups" TEXT DEFAULT '[{"id":"DEFAULT","name":"Team Members"}]'`
       );
+    }
+  } catch (error) {
+    // Database table not created yet or already exists
+  }
+
+  try {
+    const empInfo = (await prisma.$queryRawUnsafe(`PRAGMA table_info("Employee")`)) as any[];
+    if (empInfo) {
+      if (!empInfo.some(col => col.name === 'fixedDaySchedule')) {
+        await prisma.$executeRawUnsafe(
+          `ALTER TABLE "Employee" ADD COLUMN "fixedDaySchedule" TEXT DEFAULT '{}'`
+        );
+      }
+      if (!empInfo.some(col => col.name === 'breakMinutes')) {
+        await prisma.$executeRawUnsafe(
+          `ALTER TABLE "Employee" ADD COLUMN "breakMinutes" INTEGER`
+        );
+      }
     }
   } catch (error) {
     // Database table not created yet or already exists

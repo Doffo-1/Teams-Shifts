@@ -34,7 +34,7 @@ export async function POST(req: Request) {
   try {
     await ensureDefaultData();
     const body = await req.json();
-    const { name, description, exportGroupName, breakMinutes, groups } = body;
+    const { name, description, exportGroupName, breakMinutes, groups, earlyStart, earlyEnd, lateStart, lateEnd } = body;
 
     if (!name || !name.trim()) {
       return NextResponse.json({ error: 'Team name is required' }, { status: 400 });
@@ -75,8 +75,8 @@ export async function POST(req: Request) {
         },
         shiftTypes: {
           create: [
-            { code: 'EARLY', label: 'Early', defaultStart: '07:30', defaultEnd: '16:00', themeColor: '3. Green', isSystem: true },
-            { code: 'LATE', label: 'Late', defaultStart: '09:30', defaultEnd: '18:00', themeColor: '2. Blue', isSystem: true },
+            { code: 'EARLY', label: 'Early', defaultStart: earlyStart?.trim() || '07:30', defaultEnd: earlyEnd?.trim() || '16:00', themeColor: '3. Green', isSystem: true },
+            { code: 'LATE', label: 'Late', defaultStart: lateStart?.trim() || '09:30', defaultEnd: lateEnd?.trim() || '18:00', themeColor: '2. Blue', isSystem: true },
             { code: 'CUSTOM', label: 'Custom', defaultStart: '08:30', defaultEnd: '17:00', themeColor: '5. Pink', isSystem: true },
             { code: 'SICK', label: 'Sick', defaultStart: '08:30', defaultEnd: '17:00', themeColor: '1. White', isSystem: true },
             { code: 'VACATION', label: 'Vacation', defaultStart: '08:30', defaultEnd: '17:00', themeColor: '1. White', isSystem: true },
@@ -112,7 +112,18 @@ export async function POST(req: Request) {
 export async function PUT(req: Request) {
   try {
     const body = await req.json();
-    const { id, name, description, exportGroupName, breakMinutes, groups } = body;
+    const {
+      id,
+      name,
+      description,
+      exportGroupName,
+      breakMinutes,
+      groups,
+      earlyStart,
+      earlyEnd,
+      lateStart,
+      lateEnd,
+    } = body;
 
     if (!id) {
       return NextResponse.json({ error: 'Team ID is required' }, { status: 400 });
@@ -124,6 +135,60 @@ export async function PUT(req: Request) {
         await prisma.$executeRawUnsafe(`UPDATE "Team" SET "groups" = ? WHERE id = ?`, groupsStr, id);
       } catch (e) {
         console.error('Failed to update groups with raw SQL:', e);
+      }
+    }
+
+    if (earlyStart || earlyEnd) {
+      const existingEarly = await prisma.shiftTypeConfig.findFirst({
+        where: { teamId: id, code: 'EARLY' },
+      });
+      if (existingEarly) {
+        await prisma.shiftTypeConfig.update({
+          where: { id: existingEarly.id },
+          data: {
+            ...(earlyStart ? { defaultStart: earlyStart.trim() } : {}),
+            ...(earlyEnd ? { defaultEnd: earlyEnd.trim() } : {}),
+          },
+        });
+      } else {
+        await prisma.shiftTypeConfig.create({
+          data: {
+            teamId: id,
+            code: 'EARLY',
+            label: 'Early',
+            defaultStart: earlyStart?.trim() || '07:30',
+            defaultEnd: earlyEnd?.trim() || '16:00',
+            themeColor: '3. Green',
+            isSystem: true,
+          },
+        });
+      }
+    }
+
+    if (lateStart || lateEnd) {
+      const existingLate = await prisma.shiftTypeConfig.findFirst({
+        where: { teamId: id, code: 'LATE' },
+      });
+      if (existingLate) {
+        await prisma.shiftTypeConfig.update({
+          where: { id: existingLate.id },
+          data: {
+            ...(lateStart ? { defaultStart: lateStart.trim() } : {}),
+            ...(lateEnd ? { defaultEnd: lateEnd.trim() } : {}),
+          },
+        });
+      } else {
+        await prisma.shiftTypeConfig.create({
+          data: {
+            teamId: id,
+            code: 'LATE',
+            label: 'Late',
+            defaultStart: lateStart?.trim() || '09:30',
+            defaultEnd: lateEnd?.trim() || '18:00',
+            themeColor: '2. Blue',
+            isSystem: true,
+          },
+        });
       }
     }
 

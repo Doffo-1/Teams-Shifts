@@ -69,7 +69,7 @@ export default function VersionPage() {
                   Version Control & Software Updates
                 </h2>
                 <span className="badge" style={{ fontSize: '0.7rem', padding: '0.15rem 0.5rem', background: 'rgba(59, 130, 246, 0.2)', color: '#93c5fd', border: '1px solid rgba(59, 130, 246, 0.3)' }}>
-                  v{updateInfo?.currentVersion || '1.0.7'}
+                  v{updateInfo?.currentVersion || '1.0.9'}
                 </span>
               </div>
               <div style={{ fontSize: '0.8rem', color: 'var(--slate-400)', marginTop: 2 }}>
@@ -155,7 +155,7 @@ export default function VersionPage() {
                   <div style={{ display: 'flex', flexDirection: 'column' }}>
                     <span style={{ fontSize: '0.72rem', color: 'var(--slate-400)', textTransform: 'uppercase', fontWeight: 600 }}>Installed Edition</span>
                     <span style={{ fontSize: '1.15rem', fontWeight: 800, color: 'white', fontFamily: 'monospace' }}>
-                      v{updateInfo?.currentVersion || '1.0.7'}
+                      v{updateInfo?.currentVersion || '1.0.9'}
                     </span>
                   </div>
 
@@ -168,7 +168,7 @@ export default function VersionPage() {
                   <div style={{ display: 'flex', flexDirection: 'column', textAlign: 'right' }}>
                     <span style={{ fontSize: '0.72rem', color: 'var(--slate-400)', textTransform: 'uppercase', fontWeight: 600 }}>Latest Release</span>
                     <span style={{ fontSize: '1.15rem', fontWeight: 800, color: updateInfo?.hasUpdate ? '#60a5fa' : '#34d399', fontFamily: 'monospace' }}>
-                      v{updateInfo?.latestVersion || updateInfo?.currentVersion || '1.0.7'}
+                      v{updateInfo?.latestVersion || updateInfo?.currentVersion || '1.0.9'}
                     </span>
                   </div>
                 </div>
@@ -250,7 +250,7 @@ export default function VersionPage() {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
                 <div>
                   <h4 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 700, color: 'white' }}>
-                    {updateInfo?.releaseName || `Release v${updateInfo?.latestVersion || updateInfo?.currentVersion || '1.0.7'}`}
+                    {updateInfo?.releaseName || `Release v${updateInfo?.latestVersion || updateInfo?.currentVersion || '1.0.9'}`}
                   </h4>
                   {updateInfo?.publishedAt && (
                     <div style={{ fontSize: '0.75rem', color: 'var(--slate-400)' }}>

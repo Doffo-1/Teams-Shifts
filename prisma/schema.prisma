@@ -81,6 +81,8 @@ model Employee {
   // Configurable Constraints per Employee
   allowedLocation String    @default("ANY") // "ANY" | "HOME_ONLY" | "OFFICE_ONLY"
   fixedOffDays    String    @default("[]")  // JSON array of day numbers (e.g. [5] for Friday)
+  fixedDaySchedule String   @default("{}")  // JSON map of day numbers to fixed schedule config
+  breakMinutes     Int?                     // Custom break minutes override (null = team default)
   maxOfficeDays   Int?                      // Override team limit if set
   maxLateShifts   Int?                      // Override team limit if set
   autoSchedule    Boolean   @default(true)  // Whether auto-fill schedules this member

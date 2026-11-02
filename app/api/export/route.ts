@@ -169,7 +169,7 @@ export async function GET(req: Request) {
         endTime: endTime,
         color: themeColor,
         label: shiftLabel,
-        break: breakMinutes,
+        break: (shift.employee as any).breakMinutes != null ? (shift.employee as any).breakMinutes : breakMinutes,
         notes: displayNotes,
         shared: '2. Not shared',
       };
