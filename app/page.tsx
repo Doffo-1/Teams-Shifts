@@ -487,6 +487,64 @@ export default function Home() {
     }
   }, [applyState?.logs, localModalLogs]);
 
+  // Master modal update calculations
+  const isModalUpdatingActive =
+    isUpdatingModal ||
+    downloadProgress?.status === 'downloading' ||
+    (applyState && applyState.status !== 'idle' && applyState.status !== 'error');
+
+  const modalDownloadPct = downloadProgress?.progress || 0;
+  let modalMasterProgress = 0;
+  let modalStep = 1;
+  let modalStepTitle = 'Checking Update Status';
+  let modalStepDetail = 'Ready to begin in-app update';
+
+  if (downloadProgress?.status === 'downloading') {
+    modalStep = 1;
+    modalMasterProgress = Math.round(modalDownloadPct * 0.4);
+    modalStepTitle = `Step 1 of 4: Downloading ${downloadProgress.fileName}`;
+    modalStepDetail = `${downloadProgress.downloadedFormatted || '0 B'} / ${downloadProgress.totalFormatted || '...'} • ${downloadProgress.speed || 'Downloading...'}`;
+  } else if (applyState && applyState.status !== 'idle') {
+    if (applyState.status === 'extracting') {
+      modalStep = 2;
+      modalMasterProgress = 40 + Math.round((applyState.progress / 100) * 25);
+      modalStepTitle = 'Step 2 of 4: Unpacking Application Archive';
+      modalStepDetail = applyState.detail || 'Extracting binaries and Next.js bundle to temporary staging area';
+    } else if (applyState.status === 'verifying') {
+      modalStep = 3;
+      modalMasterProgress = 65 + Math.round((applyState.progress / 100) * 15);
+      modalStepTitle = 'Step 3 of 4: Verifying Application Files';
+      modalStepDetail = applyState.detail || 'Checking launcher binaries and securing database (shifts.db)';
+    } else if (applyState.status === 'staging') {
+      modalStep = 3;
+      modalMasterProgress = 80 + Math.round((applyState.progress / 100) * 15);
+      modalStepTitle = 'Step 3 of 4: Arming Zero-Shell Silent Runner';
+      modalStepDetail = applyState.detail || 'Preparing silent background replacement script';
+    } else if (applyState.status === 'restarting') {
+      modalStep = 4;
+      modalMasterProgress = 100;
+      modalStepTitle = 'Step 4 of 4: Restarting Teams Shifts';
+      modalStepDetail = 'Application will relaunch automatically in 2-3 seconds with new version';
+    } else if (applyState.status === 'error') {
+      modalStepTitle = 'Update Failed';
+      modalStepDetail = applyState.error || 'An error occurred during update';
+    }
+  } else if (downloadProgress?.status === 'completed') {
+    modalStep = 2;
+    modalMasterProgress = 40;
+    modalStepTitle = 'Package Downloaded & Verified';
+    modalStepDetail = `${downloadProgress.fileName} is ready to be applied.`;
+  }
+
+  const combinedModalLogs = [...localModalLogs];
+  if (applyState?.logs && applyState.logs.length > 0) {
+    applyState.logs.forEach(l => {
+      if (!combinedModalLogs.some(existing => existing.text === l.text && existing.time === l.time)) {
+        combinedModalLogs.push(l);
+      }
+    });
+  }
+
   const handleExport = async () => {
     const teamId = selectedTeamId || currentTeam?.id;
     setExporting(true);
@@ -2905,66 +2963,8 @@ export default function Home() {
               </div>
 
               {/* TAB 1: OVERVIEW & DOWNLOADS */}
-              {versionTab === 'overview' && (() => {
-                const isModalUpdatingActive =
-                  isUpdatingModal ||
-                  downloadProgress?.status === 'downloading' ||
-                  (applyState && applyState.status !== 'idle' && applyState.status !== 'error');
-
-                const modalDownloadPct = downloadProgress?.progress || 0;
-                let modalMasterProgress = 0;
-                let modalStep = 1;
-                let modalStepTitle = 'Checking Update Status';
-                let modalStepDetail = 'Ready to begin in-app update';
-
-                if (downloadProgress?.status === 'downloading') {
-                  modalStep = 1;
-                  modalMasterProgress = Math.round(modalDownloadPct * 0.4);
-                  modalStepTitle = `Step 1 of 4: Downloading ${downloadProgress.fileName}`;
-                  modalStepDetail = `${downloadProgress.downloadedFormatted || '0 B'} / ${downloadProgress.totalFormatted || '...'} • ${downloadProgress.speed || 'Downloading...'}`;
-                } else if (applyState && applyState.status !== 'idle') {
-                  if (applyState.status === 'extracting') {
-                    modalStep = 2;
-                    modalMasterProgress = 40 + Math.round((applyState.progress / 100) * 25);
-                    modalStepTitle = 'Step 2 of 4: Unpacking Application Archive';
-                    modalStepDetail = applyState.detail || 'Extracting binaries and Next.js bundle to temporary staging area';
-                  } else if (applyState.status === 'verifying') {
-                    modalStep = 3;
-                    modalMasterProgress = 65 + Math.round((applyState.progress / 100) * 15);
-                    modalStepTitle = 'Step 3 of 4: Verifying Application Files';
-                    modalStepDetail = applyState.detail || 'Checking launcher binaries and securing database (shifts.db)';
-                  } else if (applyState.status === 'staging') {
-                    modalStep = 3;
-                    modalMasterProgress = 80 + Math.round((applyState.progress / 100) * 15);
-                    modalStepTitle = 'Step 3 of 4: Arming Zero-Shell Silent Runner';
-                    modalStepDetail = applyState.detail || 'Preparing silent background replacement script';
-                  } else if (applyState.status === 'restarting') {
-                    modalStep = 4;
-                    modalMasterProgress = 100;
-                    modalStepTitle = 'Step 4 of 4: Restarting Teams Shifts';
-                    modalStepDetail = 'Application will relaunch automatically in 2-3 seconds with new version';
-                  } else if (applyState.status === 'error') {
-                    modalStepTitle = 'Update Failed';
-                    modalStepDetail = applyState.error || 'An error occurred during update';
-                  }
-                } else if (downloadProgress?.status === 'completed') {
-                  modalStep = 2;
-                  modalMasterProgress = 40;
-                  modalStepTitle = 'Package Downloaded & Verified';
-                  modalStepDetail = `${downloadProgress.fileName} is ready to be applied.`;
-                }
-
-                const combinedModalLogs = [...localModalLogs];
-                if (applyState?.logs && applyState.logs.length > 0) {
-                  applyState.logs.forEach(l => {
-                    if (!combinedModalLogs.some(existing => existing.text === l.text && existing.time === l.time)) {
-                      combinedModalLogs.push(l);
-                    }
-                  });
-                }
-
-                return (
-                  <div>
+              {versionTab === 'overview' && (
+                <div>
                     {/* If Update in Progress: Show Dedicated In-App Update Tracking Card */}
                     {isModalUpdatingActive ? (
                       <div className="update-screen-card">
