@@ -1,0 +1,48 @@
+name: 🐛 Bug Report
+description: Create a report to help us improve Teams Shifts
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report an issue!
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear and concise description of what the bug is.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction-steps
+    attributes:
+      label: Steps to Reproduce
+      description: How can we reproduce this behavior?
+      placeholder: |
+        1. Open Teams Shifts
+        2. Click on '...'
+        3. See error
+    validations:
+      required: true
+  - type: dropdown
+    id: package-type
+    attributes:
+      label: Installation Type
+      options:
+        - Windows Installer (Setup.exe in Program Files)
+        - Portable Edition (ZIP / Standalone folder)
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Windows Version
+      placeholder: Windows 11 (24H2) / Windows 10
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / Error Output
+      description: Relevant logs from `data\server.log` or browser console if available.
+      render: shell

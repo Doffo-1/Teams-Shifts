@@ -1,30 +1,28 @@
 # 📅 Teams Shifts (Standalone Desktop Edition)
 
 [![Platform: Windows](https://img.shields.io/badge/Platform-Windows_10%2B-blue?logo=windows)](https://microsoft.com/windows)
-[![Admin: None](https://img.shields.io/badge/Admin_Rights-Not_Required-brightgreen)](https://microsoft.com)
+[![Release Status](https://img.shields.io/github/v/release/Doffo-1/Teams-Shifts?include_prereleases&logo=github&color=brightgreen)](https://github.com/Doffo-1/Teams-Shifts/releases)
+[![CI](https://github.com/Doffo-1/Teams-Shifts/actions/workflows/ci.yml/badge.svg)](https://github.com/Doffo-1/Teams-Shifts/actions/workflows/ci.yml)
+[![Release Pipeline](https://github.com/Doffo-1/Teams-Shifts/actions/workflows/release.yml/badge.svg)](https://github.com/Doffo-1/Teams-Shifts/actions/workflows/release.yml)
 [![Runtime: Node.js](https://img.shields.io/badge/Runtime-Node.js_Bundled-green?logo=node.js)](https://nodejs.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![CI/CD: GitHub Actions](https://img.shields.io/badge/CI%2FCD-Automated_Release-purple?logo=githubactions)](.github/workflows/release.yml)
 
 An intelligent, multi-team shift scheduler and Microsoft Teams Shifts export/import platform packaged as a standalone desktop application for Windows with in-app version control and automated GitHub release pipelines.
 
 ---
 
-## 🚀 Quick Start
+## 📥 Downloads & Installation
 
-### Option 1: Windows Installer (Setup.exe - Recommended)
-1. Download **`TeamsShifts-Setup.exe`** from [GitHub Releases](https://github.com/Doffo-1/Teams-Shifts/releases) or the `dist/` directory.
-2. Run the setup wizard to install into **`C:\Program Files\Teams Shifts`**.
-3. Launch from your Start Menu or Desktop shortcut.
+| Package | Format | Description |
+|---|---|---|
+| 💾 [**TeamsShifts-Setup.exe**](https://github.com/Doffo-1/Teams-Shifts/releases) | **Windows Installer** | Installs into `C:\Program Files\Teams Shifts` with Start Menu & Desktop shortcuts and uninstaller. *(Recommended)* |
+| 📦 [**TeamsShifts-Standalone.zip**](https://github.com/Doffo-1/Teams-Shifts/releases) | **Portable ZIP** | Zero-install portable edition. Extract anywhere and launch `TeamsShifts.exe`. |
+| 🔒 [**SHA256SUMS.txt**](https://github.com/Doffo-1/Teams-Shifts/releases) | **Checksums** | SHA-256 integrity signatures for verification. |
 
-### Option 2: Portable ZIP Archive
-1. Download `TeamsShifts-Standalone.zip` from [GitHub Releases](https://github.com/Doffo-1/Teams-Shifts/releases).
-2. Extract anywhere (Desktop, Documents, or local SSD).
-3. Double-click **`TeamsShifts.exe`**.
-
-### Option 3: Run directly from `standalone-app` folder
-1. Open the [`standalone-app`](standalone-app) folder.
-2. Double-click **`TeamsShifts.exe`**.
+### Quick Start:
+* **Installer**: Run `TeamsShifts-Setup.exe` and follow the wizard.
+* **Portable**: Extract `TeamsShifts-Standalone.zip` and double-click `TeamsShifts.exe`.
+* **Local Workspace**: Open [`standalone-app`](standalone-app) and run `TeamsShifts.exe`.
 
 ---
 

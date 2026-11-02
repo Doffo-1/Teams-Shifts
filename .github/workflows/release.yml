@@ -1,41 +1,65 @@
-name: Build and Release Standalone Desktop App
+name: Release Standalone Desktop App
 
 on:
   push:
     tags:
       - 'v*'
-    branches:
-      - main
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version tag (e.g. v1.1.0)'
+        description: 'Release version tag (e.g. v1.0.1)'
         required: false
         default: 'v1.0.0'
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: write
 
 jobs:
-  build:
+  build-and-release:
+    name: Build & Release Desktop Application
     runs-on: windows-latest
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Determine Release Tag
+        id: release_info
+        run: |
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $tag = "${{ github.ref_name }}"
+          } elseif ("${{ github.event_name }}" -eq "workflow_dispatch" -and "${{ inputs.version }}") {
+            $tag = "${{ inputs.version }}"
+          } else {
+            $tag = "v1.0.0"
+          }
+          if (-not $tag.StartsWith("v") -and -not $tag.StartsWith("V")) {
+            $tag = "v$tag"
+          }
+          echo "tag=$tag" >> $env:GITHUB_OUTPUT
+          echo "clean_version=$($tag.TrimStart('v','V'))" >> $env:GITHUB_OUTPUT
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
+      - name: Setup Node.js with pnpm Cache
         uses: actions/setup-node@v4
         with:
           node-version: 20
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v3
-        with:
-          version: 9
+          cache: 'pnpm'
 
       - name: Install Dependencies
         run: pnpm install --frozen-lockfile=false
+
+      - name: Generate Prisma Client
+        run: pnpm exec prisma generate
 
       - name: Build Next.js Standalone
         run: pnpm run build
@@ -51,9 +75,9 @@ jobs:
 
       - name: Package Standalone App
         run: |
-          New-Item -ItemType Directory -Path dist/TeamsShifts/app -Force
-          New-Item -ItemType Directory -Path dist/TeamsShifts/data -Force
-          New-Item -ItemType Directory -Path dist/TeamsShifts/runtime -Force
+          New-Item -ItemType Directory -Path dist/TeamsShifts/app -Force | Out-Null
+          New-Item -ItemType Directory -Path dist/TeamsShifts/data -Force | Out-Null
+          New-Item -ItemType Directory -Path dist/TeamsShifts/runtime -Force | Out-Null
 
           # Copy binaries and assets
           Copy-Item "TeamsShifts.exe" "dist/TeamsShifts/TeamsShifts.exe"
@@ -72,48 +96,57 @@ jobs:
           $nodePath = (Get-Command node).Source
           Copy-Item $nodePath "dist/TeamsShifts/runtime/node.exe"
 
-          # Create blank initialized SQLite database with zero teams
-          & node -e "const { PrismaClient } = require('./dist/TeamsShifts/app/node_modules/@prisma/client'); const p = new PrismaClient({ datasources: { db: { url: 'file:./dist/TeamsShifts/data/shifts.db' } } }); (async () => { await p.\$executeRawUnsafe('CREATE TABLE IF NOT EXISTS Team (id TEXT PRIMARY KEY, name TEXT NOT NULL, exportGroupName TEXT NOT NULL DEFAULT \'Team Shifts\', breakMinutes INTEGER NOT NULL DEFAULT 30, groups TEXT NOT NULL DEFAULT \'[]\', createdAt DATETIME DEFAULT CURRENT_TIMESTAMP, updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP);'); console.log('DB init'); })();"
+          # Initialize template SQLite database
+          $initScript = @"
+          const { PrismaClient } = require('./dist/TeamsShifts/app/node_modules/@prisma/client');
+          const p = new PrismaClient({ datasources: { db: { url: 'file:./dist/TeamsShifts/data/shifts.db' } } });
+          (async () => {
+            await p.`$executeRawUnsafe('CREATE TABLE IF NOT EXISTS Team (id TEXT PRIMARY KEY, name TEXT NOT NULL, slug TEXT UNIQUE NOT NULL DEFAULT "default", exportGroupName TEXT NOT NULL DEFAULT "Team Shifts", breakMinutes INTEGER NOT NULL DEFAULT 30, groups TEXT NOT NULL DEFAULT "[]", createdAt DATETIME DEFAULT CURRENT_TIMESTAMP, updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP);');
+            console.log('Database initialized successfully');
+            process.exit(0);
+          })();
+          "@
+          Set-Content -Path "init-db.js" -Value $initScript
+          & node init-db.js
+          Remove-Item "init-db.js" -Force
 
-          # Create ZIP Archive
+          # Create ZIP Archive (Portable Edition)
           Compress-Archive -Path "dist/TeamsShifts/*" -DestinationPath "TeamsShifts-Standalone.zip"
-
-      - name: Determine Release Tag
-        id: release_info
-        run: |
-          if ("${{ github.ref_type }}" -eq "tag") {
-            echo "tag=${{ github.ref_name }}" >> $env:GITHUB_OUTPUT
-            echo "is_prerelease=false" >> $env:GITHUB_OUTPUT
-          } elseif ("${{ github.event_name }}" -eq "workflow_dispatch" -and "${{ inputs.version }}") {
-            echo "tag=${{ inputs.version }}" >> $env:GITHUB_OUTPUT
-            echo "is_prerelease=false" >> $env:GITHUB_OUTPUT
-          } else {
-            echo "tag=latest" >> $env:GITHUB_OUTPUT
-            echo "is_prerelease=false" >> $env:GITHUB_OUTPUT
-          }
 
       - name: Build Windows Installer (Setup.exe)
         run: |
           if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) {
             choco install innosetup --no-progress
           }
-          $iscc = "iscc"
-          if (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe") {
+          $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source
+          if (-not $iscc) {
             $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           }
-          $tag = "${{ steps.release_info.outputs.tag }}"
-          $cleanVer = $tag.TrimStart('v', 'V')
-          if (-not $cleanVer) { $cleanVer = "1.0.0" }
+          $cleanVer = "${{ steps.release_info.outputs.clean_version }}"
           & $iscc "/DAppVersion=$cleanVer" "/DSourceDir=..\dist\TeamsShifts" "installer\setup.iss"
+
+      - name: Generate Checksums
+        run: |
+          $files = @("dist/TeamsShifts-Setup.exe", "TeamsShifts-Standalone.zip")
+          $lines = foreach ($f in $files) {
+            if (Test-Path $f) {
+              $h = Get-FileHash -Algorithm SHA256 $f
+              "$($h.Hash.ToLower())  $(Split-Path $f -Leaf)"
+            }
+          }
+          $lines | Out-File -Encoding ascii -FilePath "SHA256SUMS.txt"
+          Write-Host "Generated SHA256SUMS.txt:" -ForegroundColor Green
+          Get-Content "SHA256SUMS.txt"
 
       - name: Create or Update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            TeamsShifts-Standalone.zip
             dist/TeamsShifts-Setup.exe
+            TeamsShifts-Standalone.zip
+            SHA256SUMS.txt
           tag_name: ${{ steps.release_info.outputs.tag }}
           name: Release ${{ steps.release_info.outputs.tag }}
           draft: false
-          prerelease: ${{ steps.release_info.outputs.is_prerelease }}
+          prerelease: false
           generate_release_notes: true
