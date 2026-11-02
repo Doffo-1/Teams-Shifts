@@ -82,13 +82,14 @@ namespace TeamsShiftsLauncher
             // Setup Tray Icon
             SetupTrayIcon();
 
-            // Fast readiness detection: open window as soon as TCP port accepts connections
+            // Instant Window Launch: open browser immediately on double-click
+            OpenApplicationWindow();
+
+            // Background worker to monitor server readiness and check for updates
             ThreadPool.QueueUserWorkItem(delegate
             {
                 if (WaitForServerReady(30000))
                 {
-                    OpenApplicationWindow();
-
                     // Optional background check for updates
                     try
                     {
@@ -354,6 +355,14 @@ namespace TeamsShiftsLauncher
                     }
                 }
 
+                // Determine target URL: loading.html if server is still starting, or appUrl directly if ready
+                string targetLaunchUrl = appUrl;
+                string loadingHtmlPath = Path.Combine(appDir, "loading.html");
+                if (File.Exists(loadingHtmlPath) && !WaitForServerReady(30))
+                {
+                    targetLaunchUrl = "file:///" + loadingHtmlPath.Replace('\\', '/') + "?url=" + Uri.EscapeDataString(appUrl);
+                }
+
                 // If app browser is found, run in dedicated standalone app-window mode
                 if (browserExe != null)
                 {
@@ -370,8 +379,8 @@ namespace TeamsShiftsLauncher
                         "--app=\"{0}\" --user-data-dir=\"{1}\" --window-size=1380,880 " +
                         "--no-first-run --no-default-browser-check --disable-background-networking " +
                         "--disable-sync --disable-translate --disable-extensions --disable-component-update " +
-                        "--disable-default-apps --disable-features=Translate,OptimizationHints,MediaRouter",
-                        appUrl, profileDir);
+                        "--disable-default-apps --disable-features=Translate,OptimizationHints,MediaRouter --allow-file-access-from-files",
+                        targetLaunchUrl, profileDir);
 
                     ProcessStartInfo bPsi = new ProcessStartInfo
                     {
@@ -401,7 +410,7 @@ namespace TeamsShiftsLauncher
                 }
 
                 // Fallback to default browser
-                Process.Start(appUrl);
+                Process.Start(targetLaunchUrl);
             }
             catch (Exception)
             {

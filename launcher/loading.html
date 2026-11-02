@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Teams Shifts Generator</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #0f172a;
+      color: #e2e8f0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      user-select: none;
+      overflow: hidden;
+    }
+    .card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 20px;
+      padding: 3rem 2.5rem;
+      text-align: center;
+      width: 420px;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7);
+    }
+    .icon {
+      width: 60px;
+      height: 60px;
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      border-radius: 16px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 1.5rem;
+      box-shadow: 0 10px 25px -5px rgba(99, 102, 241, 0.5);
+    }
+    h1 {
+      font-size: 1.4rem;
+      font-weight: 700;
+      color: #f8fafc;
+      margin-bottom: 0.5rem;
+      letter-spacing: -0.02em;
+    }
+    p {
+      font-size: 0.875rem;
+      color: #94a3b8;
+      margin-bottom: 2rem;
+    }
+    .progress-bar {
+      width: 100%;
+      height: 6px;
+      background: #0f172a;
+      border-radius: 999px;
+      overflow: hidden;
+      position: relative;
+    }
+    .progress-fill {
+      position: absolute;
+      top: 0;
+      left: 0;
+      bottom: 0;
+      width: 40%;
+      background: linear-gradient(90deg, #6366f1, #38bdf8);
+      border-radius: 999px;
+      animation: indeterminate 1.4s cubic-bezier(0.65, 0.815, 0.735, 0.395) infinite;
+    }
+    @keyframes indeterminate {
+      0% { left: -40%; width: 40%; }
+      50% { left: 20%; width: 80%; }
+      100% { left: 100%; width: 40%; }
+    }
+    .status {
+      font-size: 0.75rem;
+      color: #64748b;
+      margin-top: 1rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect width="20" height="14" x="2" y="7" rx="2" ry="2"/>
+        <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>
+      </svg>
+    </div>
+    <h1>Teams Shifts Generator</h1>
+    <p>Starting background server...</p>
+    <div class="progress-bar">
+      <div class="progress-fill"></div>
+    </div>
+    <div class="status" id="statusText">Initializing workspace...</div>
+  </div>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    let targetUrl = params.get('url') || 'http://127.0.0.1:3000/';
+    if (!targetUrl.endsWith('/')) targetUrl += '/';
+    let isRedirecting = false;
+
+    function onServerReady() {
+      if (isRedirecting) return;
+      isRedirecting = true;
+      const statusEl = document.getElementById('statusText');
+      if (statusEl) statusEl.innerText = 'Server ready! Loading schedule...';
+      window.location.replace(targetUrl);
+    }
+
+    function checkViaFetch() {
+      if (isRedirecting) return;
+      fetch(targetUrl, { mode: 'no-cors' })
+        .then(() => onServerReady())
+        .catch(() => {});
+    }
+
+    function checkViaImage() {
+      if (isRedirecting) return;
+      const img = new Image();
+      img.onload = onServerReady;
+      img.onerror = () => {};
+      img.src = targetUrl + 'favicon.ico?t=' + Date.now();
+    }
+
+    function poll() {
+      if (isRedirecting) return;
+      checkViaFetch();
+      checkViaImage();
+      setTimeout(poll, 250);
+    }
+
+    // Start polling immediately
+    poll();
+  </script>
+</body>
+</html>
