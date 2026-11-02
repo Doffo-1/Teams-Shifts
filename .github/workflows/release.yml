@@ -59,6 +59,7 @@ jobs:
           Copy-Item "TeamsShifts.exe" "dist/TeamsShifts/TeamsShifts.exe"
           Copy-Item "launcher/app.ico" "dist/TeamsShifts/app.ico"
           Copy-Item "launcher/run-console.bat" "dist/TeamsShifts/run-console.bat"
+          Copy-Item "launcher/stop.bat" "dist/TeamsShifts/stop.bat"
           Copy-Item "launcher/README.txt" "dist/TeamsShifts/README.txt"
 
           # Copy compiled Next.js standalone server

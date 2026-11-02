@@ -14,6 +14,7 @@ namespace TeamsShiftsLauncher
     static class Program
     {
         private static Process nodeProcess;
+        private static Process browserProcess;
         private static NotifyIcon trayIcon;
         private static int activePort = 3000;
         private static string appUrl = "";
@@ -22,12 +23,20 @@ namespace TeamsShiftsLauncher
         private static string logFile = "";
         private static Mutex appMutex;
         private static IntPtr jobHandle = IntPtr.Zero;
+        private static readonly object cleanupLock = new object();
+        private static bool isCleanedUp = false;
+        private static bool exitOnWindowClose = true;
 
         [STAThread]
         static void Main()
         {
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
+
+            // Register global exit handlers to guarantee Cleanup() always runs
+            Application.ApplicationExit += delegate { Cleanup(); };
+            AppDomain.CurrentDomain.ProcessExit += delegate { Cleanup(); };
+            Microsoft.Win32.SystemEvents.SessionEnding += delegate { Cleanup(); };
 
             bool isNewInstance;
             appMutex = new Mutex(true, "TeamsShifts_SingleInstance_Mutex", out isNewInstance);
@@ -59,6 +68,7 @@ namespace TeamsShiftsLauncher
             // Start background Node server
             if (!StartNodeServer())
             {
+                Cleanup();
                 return;
             }
 
@@ -109,7 +119,7 @@ namespace TeamsShiftsLauncher
             // Run message loop for system tray
             Application.Run();
 
-            // Cleanup
+            // Final cleanup when message loop exits
             Cleanup();
         }
 
@@ -216,6 +226,13 @@ namespace TeamsShiftsLauncher
                 nodeProcess.Exited += (s, e) =>
                 {
                     try { File.AppendAllText(logFile, string.Format("=== Server Exited at {0} with code {1} ===\r\n", DateTime.Now, nodeProcess.ExitCode)); } catch { }
+                    
+                    // When server terminates, automatically stop all services and exit application
+                    try
+                    {
+                        Application.Exit();
+                    }
+                    catch { }
                 };
 
                 nodeProcess.Start();
@@ -284,40 +301,70 @@ namespace TeamsShiftsLauncher
         {
             try
             {
-                // Check for Microsoft Edge
-                string edgePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), @"Microsoft\Edge\Application\msedge.exe");
-                if (!File.Exists(edgePath))
-                {
-                    edgePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), @"Microsoft\Edge\Application\msedge.exe");
-                }
+                string browserExe = null;
 
-                if (File.Exists(edgePath))
-                {
-                    string profileDir = Path.Combine(dataDir, "webview_profile");
-                    string edgeArgs = string.Format("--app=\"{0}\" --user-data-dir=\"{1}\" --window-size=1380,880", appUrl, profileDir);
-                    Process.Start(edgePath, edgeArgs);
-                    return;
-                }
-
-                // Check for Google Chrome
+                // 1. Check for Google Chrome
                 string chromePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), @"Google\Chrome\Application\chrome.exe");
                 if (!File.Exists(chromePath))
                 {
                     chromePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), @"Google\Chrome\Application\chrome.exe");
                 }
-
                 if (File.Exists(chromePath))
                 {
+                    browserExe = chromePath;
+                }
+
+                // 2. Check for Microsoft Edge
+                if (browserExe == null)
+                {
+                    string edgePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), @"Microsoft\Edge\Application\msedge.exe");
+                    if (!File.Exists(edgePath))
+                    {
+                        edgePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), @"Microsoft\Edge\Application\msedge.exe");
+                    }
+                    if (File.Exists(edgePath))
+                    {
+                        browserExe = edgePath;
+                    }
+                }
+
+                // If app browser is found, run in dedicated standalone app-window mode
+                if (browserExe != null)
+                {
                     string profileDir = Path.Combine(dataDir, "webview_profile");
-                    string chromeArgs = string.Format("--app=\"{0}\" --user-data-dir=\"{1}\" --window-size=1380,880", appUrl, profileDir);
-                    Process.Start(chromePath, chromeArgs);
+                    string browserArgs = string.Format("--app=\"{0}\" --user-data-dir=\"{1}\" --window-size=1380,880 --no-first-run", appUrl, profileDir);
+
+                    ProcessStartInfo bPsi = new ProcessStartInfo
+                    {
+                        FileName = browserExe,
+                        Arguments = browserArgs,
+                        UseShellExecute = false
+                    };
+
+                    browserProcess = Process.Start(bPsi);
+                    if (browserProcess != null)
+                    {
+                        browserProcess.EnableRaisingEvents = true;
+                        browserProcess.Exited += delegate
+                        {
+                            // When user closes the application window, immediately stop all services and quit!
+                            if (exitOnWindowClose)
+                            {
+                                try
+                                {
+                                    Application.Exit();
+                                }
+                                catch { }
+                            }
+                        };
+                    }
                     return;
                 }
 
                 // Fallback to default browser
                 Process.Start(appUrl);
             }
-            catch (Exception ex)
+            catch (Exception)
             {
                 try { Process.Start(appUrl); } catch { }
             }
@@ -344,6 +391,17 @@ namespace TeamsShiftsLauncher
 
             contextMenu.MenuItems.Add("-");
 
+            MenuItem autoExitItem = new MenuItem("⚡ Stop services on window close", (s, e) =>
+            {
+                MenuItem item = (MenuItem)s;
+                exitOnWindowClose = !exitOnWindowClose;
+                item.Checked = exitOnWindowClose;
+            });
+            autoExitItem.Checked = exitOnWindowClose;
+            contextMenu.MenuItems.Add(autoExitItem);
+
+            contextMenu.MenuItems.Add("-");
+
             MenuItem dataFolderItem = new MenuItem("📁 Open Data Folder", (s, e) =>
             {
                 try { Process.Start("explorer.exe", dataDir); } catch { }
@@ -367,7 +425,7 @@ namespace TeamsShiftsLauncher
             contextMenu.MenuItems.Add(versionItem);
             contextMenu.MenuItems.Add("-");
 
-            MenuItem exitItem = new MenuItem("❌ Exit Teams Shifts", (s, e) =>
+            MenuItem exitItem = new MenuItem("❌ Stop All Services & Exit", (s, e) =>
             {
                 Application.Exit();
             });
@@ -399,36 +457,147 @@ namespace TeamsShiftsLauncher
 
         private static void Cleanup()
         {
-            if (trayIcon != null)
+            lock (cleanupLock)
             {
-                trayIcon.Visible = false;
-                trayIcon.Dispose();
-                trayIcon = null;
-            }
+                if (isCleanedUp) return;
+                isCleanedUp = true;
 
-            if (nodeProcess != null && !nodeProcess.HasExited)
-            {
-                try
+                // 1. Remove tray icon immediately
+                if (trayIcon != null)
                 {
-                    nodeProcess.Kill();
-                    nodeProcess.WaitForExit(2000);
+                    try
+                    {
+                        trayIcon.Visible = false;
+                        trayIcon.Dispose();
+                    }
+                    catch { }
+                    trayIcon = null;
                 }
-                catch { }
-                nodeProcess = null;
-            }
 
-            if (jobHandle != IntPtr.Zero)
-            {
-                CloseHandle(jobHandle);
-                jobHandle = IntPtr.Zero;
-            }
+                // 2. Terminate the browser app window if still open
+                if (browserProcess != null)
+                {
+                    try
+                    {
+                        if (!browserProcess.HasExited)
+                        {
+                            browserProcess.CloseMainWindow();
+                            if (!browserProcess.WaitForExit(1000))
+                            {
+                                KillProcessTree(browserProcess.Id);
+                            }
+                        }
+                    }
+                    catch { }
+                    browserProcess = null;
+                }
 
-            if (appMutex != null)
-            {
-                appMutex.ReleaseMutex();
-                appMutex.Dispose();
-                appMutex = null;
+                // 3. Terminate the background Node server and its process tree
+                if (nodeProcess != null)
+                {
+                    try
+                    {
+                        if (!nodeProcess.HasExited)
+                        {
+                            KillProcessTree(nodeProcess.Id);
+                        }
+                    }
+                    catch { }
+                    nodeProcess = null;
+                }
+
+                // 4. Terminate any lingering node.exe instances running under this app directory
+                KillAppNodeProcesses();
+
+                // 5. Terminate any remaining process occupying activePort
+                KillProcessesOnPort(activePort);
+
+                // 6. Close Windows Job Object handle
+                if (jobHandle != IntPtr.Zero)
+                {
+                    try
+                    {
+                        CloseHandle(jobHandle);
+                    }
+                    catch { }
+                    jobHandle = IntPtr.Zero;
+                }
+
+                // 7. Release single instance mutex
+                if (appMutex != null)
+                {
+                    try
+                    {
+                        appMutex.ReleaseMutex();
+                        appMutex.Dispose();
+                    }
+                    catch { }
+                    appMutex = null;
+                }
             }
+        }
+
+        private static void KillProcessTree(int pid)
+        {
+            try
+            {
+                ProcessStartInfo psi = new ProcessStartInfo
+                {
+                    FileName = "taskkill.exe",
+                    Arguments = string.Format("/F /T /PID {0}", pid),
+                    CreateNoWindow = true,
+                    UseShellExecute = false,
+                    WindowStyle = ProcessWindowStyle.Hidden
+                };
+                using (Process p = Process.Start(psi))
+                {
+                    p.WaitForExit(2000);
+                }
+            }
+            catch { }
+        }
+
+        private static void KillProcessesOnPort(int port)
+        {
+            try
+            {
+                ProcessStartInfo psi = new ProcessStartInfo
+                {
+                    FileName = "cmd.exe",
+                    Arguments = string.Format("/c for /f \"tokens=5\" %a in ('netstat -aon ^| findstr /r \":{0} \"') do @if not \"%a\"==\"\" taskkill /F /PID %a >nul 2>&1", port),
+                    CreateNoWindow = true,
+                    UseShellExecute = false,
+                    WindowStyle = ProcessWindowStyle.Hidden
+                };
+                using (Process p = Process.Start(psi))
+                {
+                    p.WaitForExit(2000);
+                }
+            }
+            catch { }
+        }
+
+        private static void KillAppNodeProcesses()
+        {
+            try
+            {
+                string localRuntime = Path.Combine(appDir, "runtime", "node.exe");
+                Process[] nodes = Process.GetProcessesByName("node");
+                foreach (Process p in nodes)
+                {
+                    try
+                    {
+                        string mainMod = p.MainModule.FileName;
+                        if (string.Equals(mainMod, localRuntime, StringComparison.OrdinalIgnoreCase) ||
+                            mainMod.StartsWith(appDir, StringComparison.OrdinalIgnoreCase))
+                        {
+                            KillProcessTree(p.Id);
+                        }
+                    }
+                    catch { }
+                }
+            }
+            catch { }
         }
 
         #region Windows Job Object Interop
