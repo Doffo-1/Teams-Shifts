@@ -239,40 +239,6 @@ button {
   background: rgba(59, 130, 246, 0.15);
 }
 
-/* User Auth Profile Badge */
-.auth-profile-badge {
-  display: flex;
-  align-items: center;
-  gap: 0.65rem;
-  padding: 0.35rem 0.75rem 0.35rem 0.45rem;
-  background: rgba(15, 23, 42, 0.7);
-  border: 1px solid rgba(51, 65, 85, 0.6);
-  border-radius: 9999px;
-  font-size: 0.8rem;
-  color: var(--slate-300);
-}
-
-.auth-avatar {
-  width: 1.8rem;
-  height: 1.8rem;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #10b981, #0ea5e9);
-  color: white;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 700;
-  font-size: 0.75rem;
-}
-
-.auth-sso-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #10b981;
-  box-shadow: 0 0 6px #10b981;
-}
-
 /* Header Actions */
 .header-actions {
   display: flex;

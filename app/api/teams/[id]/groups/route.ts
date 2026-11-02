@@ -27,7 +27,7 @@ function parseGroups(groupsJson?: string | null): GroupItem[] {
 
 async function getTeamGroups(teamId: string): Promise<GroupItem[]> {
   try {
-    const rows = await prisma.$queryRawUnsafe<any[]>(`SELECT "groups" FROM "Team" WHERE id = ?`, teamId);
+    const rows = (await prisma.$queryRawUnsafe(`SELECT "groups" FROM "Team" WHERE id = ?`, teamId)) as any[];
     if (rows && rows.length > 0) {
       return parseGroups(rows[0].groups);
     }
@@ -63,7 +63,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   // Augment groups with member count
   const groupsWithCounts = groups.map(g => ({
     ...g,
-    memberCount: team.employees.filter(e => (e.group || 'DEFAULT') === g.id).length,
+    memberCount: team.employees.filter((e: any) => (e.group || 'DEFAULT') === g.id).length,
   }));
 
   return NextResponse.json(groupsWithCounts);
@@ -182,10 +182,10 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ id: s
     }
 
     const remainingGroups = groups.filter(g => g.id !== groupId);
-    const affectedEmployees = team.employees.filter(e => (e.group || 'DEFAULT') === groupId);
+    const affectedEmployees = team.employees.filter((e: any) => (e.group || 'DEFAULT') === groupId);
 
     if (affectedEmployees.length > 0) {
-      const empIds = affectedEmployees.map(e => e.id);
+      const empIds = affectedEmployees.map((e: any) => e.id);
       if (deleteMembers) {
         // Delete all shifts and employees in this group
         await prisma.shift.deleteMany({

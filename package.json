@@ -1,14 +1,14 @@
 {
   "name": "teams-shifts",
   "version": "1.0.0",
-  "description": "Intelligent multi-team Microsoft Teams Shifts Generator with configurable rules engine and Authentik SSO",
+  "description": "Intelligent multi-team Microsoft Teams Shifts Generator with configurable rules engine",
   "private": true,
   "license": "MIT",
   "main": "electron/main.js",
   "scripts": {
-    "dev": "next dev --webpack -H 0.0.0.0 -p 3000",
-    "build": "next build",
-    "start": "next start -H 0.0.0.0 -p 3000",
+    "dev": "next dev -p 3000",
+    "build": "next build --webpack",
+    "start": "next start -p 3000",
     "lint": "eslint",
     "electron:dev": "next build && electron .",
     "electron:build": "next build && electron-builder --config electron/builder.json"

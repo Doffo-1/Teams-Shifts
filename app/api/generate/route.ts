@@ -46,7 +46,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'No active employees in team to schedule' }, { status: 400 });
     }
 
-    const employeeIds = employees.map(e => e.id);
+    const employeeIds = employees.map((e: any) => e.id);
 
     // Fetch existing manual shifts for this week & team
     const existingShifts = await prisma.shift.findMany({
@@ -57,7 +57,7 @@ export async function POST(req: Request) {
       },
     });
 
-    const inputShifts: ShiftInput[] = existingShifts.map(s => ({
+    const inputShifts: ShiftInput[] = existingShifts.map((s: any) => ({
       employeeId: s.employeeId,
       date: s.date,
       type: s.type,
@@ -71,7 +71,7 @@ export async function POST(req: Request) {
 
     // Generate schedule using team's configured rules
     const result = generateWeeklySchedule(
-      employees.map(e => ({
+      employees.map((e: any) => ({
         id: e.id,
         name: e.name,
         email: e.email,
@@ -100,7 +100,7 @@ export async function POST(req: Request) {
     );
 
     // Save in transaction: delete non-manual shifts and insert generated ones
-    await prisma.$transaction(async (tx) => {
+    await prisma.$transaction(async (tx: any) => {
       await tx.shift.deleteMany({
         where: {
           date: { gte: start, lt: end },

@@ -125,7 +125,7 @@ export async function POST(req: Request) {
       rowsToProcess.push({ member, email, startDate, startTime, endTime, color, label, notes, group });
     });
 
-    await prisma.$transaction(async (tx) => {
+    await prisma.$transaction(async (tx: any) => {
       for (const row of rowsToProcess) {
         let employee = null;
 

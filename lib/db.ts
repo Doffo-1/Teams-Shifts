@@ -17,7 +17,7 @@ export async function ensureDefaultData() {
   isInitialized = true;
 
   try {
-    const tableInfo = await prisma.$queryRawUnsafe<any[]>(`PRAGMA table_info("Team")`);
+    const tableInfo = (await prisma.$queryRawUnsafe(`PRAGMA table_info("Team")`)) as any[];
     const hasGroups = tableInfo.some(col => col.name === 'groups');
     if (!hasGroups) {
       await prisma.$executeRawUnsafe(

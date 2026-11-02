@@ -46,7 +46,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: 'No shifts found to copy', count: 0 });
     }
 
-    await prisma.$transaction(async (tx) => {
+    await prisma.$transaction(async (tx: any) => {
       for (const shift of shiftsToCopy) {
         const newDate = addDays(new Date(shift.date), dayOffset);
 

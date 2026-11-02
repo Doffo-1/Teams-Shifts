@@ -15,7 +15,7 @@ export async function GET() {
   });
 
   try {
-    const rawTeams = await prisma.$queryRawUnsafe<any[]>(`SELECT id, "groups" FROM "Team"`);
+    const rawTeams = (await prisma.$queryRawUnsafe(`SELECT id, "groups" FROM "Team"`)) as any[];
     const groupMap: Record<string, string> = {};
     for (const r of rawTeams) {
       if (r.groups) groupMap[r.id] = r.groups;
@@ -144,7 +144,7 @@ export async function PUT(req: Request) {
     });
 
     try {
-      const [raw] = await prisma.$queryRawUnsafe<any[]>(`SELECT "groups" FROM "Team" WHERE id = ?`, id);
+      const [raw] = (await prisma.$queryRawUnsafe(`SELECT "groups" FROM "Team" WHERE id = ?`, id)) as any[];
       if (raw) (team as any).groups = raw.groups;
     } catch {}
 
