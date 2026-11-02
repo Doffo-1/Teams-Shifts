@@ -275,7 +275,7 @@ namespace TeamsShiftsLauncher
                     // When server terminates, automatically stop all services and exit application
                     try
                     {
-                        Application.Exit();
+                        ExitApplication();
                     }
                     catch { }
                 };
@@ -415,8 +415,9 @@ namespace TeamsShiftsLauncher
                     string browserArgs = string.Format(
                         "--app=\"{0}\" --user-data-dir=\"{1}\" --window-size=1380,880 " +
                         "--no-first-run --no-default-browser-check --disable-background-networking " +
+                        "--disable-background-mode --no-service-autorun " +
                         "--disable-sync --disable-translate --disable-extensions --disable-component-update " +
-                        "--disable-default-apps --disable-features=Translate,OptimizationHints,MediaRouter --allow-file-access-from-files",
+                        "--disable-default-apps --disable-features=Translate,OptimizationHints,MediaRouter,StartupBoost --allow-file-access-from-files",
                         targetLaunchUrl, profileDir);
 
                     ProcessStartInfo bPsi = new ProcessStartInfo
@@ -432,16 +433,25 @@ namespace TeamsShiftsLauncher
                         browserProcess.EnableRaisingEvents = true;
                         browserProcess.Exited += delegate
                         {
-                            // When user closes the application window, immediately stop all services and quit!
                             if (exitOnWindowClose)
                             {
-                                try
-                                {
-                                    Application.Exit();
-                                }
-                                catch { }
+                                ExitApplication();
                             }
                         };
+
+                        // Additional watchdog thread to guarantee exit when window closes
+                        ThreadPool.QueueUserWorkItem(delegate
+                        {
+                            try
+                            {
+                                browserProcess.WaitForExit();
+                            }
+                            catch { }
+                            if (exitOnWindowClose)
+                            {
+                                ExitApplication();
+                            }
+                        });
                     }
                     return;
                 }
@@ -512,7 +522,7 @@ namespace TeamsShiftsLauncher
 
             MenuItem exitItem = new MenuItem("❌ Stop All Services & Exit", (s, e) =>
             {
-                Application.Exit();
+                ExitApplication();
             });
             contextMenu.MenuItems.Add(exitItem);
 
@@ -538,6 +548,21 @@ namespace TeamsShiftsLauncher
 
             trayIcon.DoubleClick += (s, e) => OpenApplicationWindow();
             trayIcon.BalloonTipClicked += (s, e) => OpenApplicationWindow();
+        }
+
+                private static void ExitApplication()
+        {
+            try
+            {
+                Cleanup();
+            }
+            catch { }
+            try
+            {
+                Application.ExitThread();
+            }
+            catch { }
+            Environment.Exit(0);
         }
 
         private static void Cleanup()
@@ -635,9 +660,27 @@ namespace TeamsShiftsLauncher
                 {
                     try
                     {
-                        string mainMod = p.MainModule.FileName;
-                        if (string.Equals(mainMod, localRuntime, StringComparison.OrdinalIgnoreCase) ||
-                            mainMod.StartsWith(appDir, StringComparison.OrdinalIgnoreCase))
+                        bool isOurNode = false;
+                        if (nodeProcess != null && p.Id == nodeProcess.Id)
+                        {
+                            isOurNode = true;
+                        }
+                        else
+                        {
+                            try
+                            {
+                                string mainMod = p.MainModule.FileName;
+                                if (!string.IsNullOrEmpty(mainMod) &&
+                                    (string.Equals(mainMod, localRuntime, StringComparison.OrdinalIgnoreCase) ||
+                                     mainMod.StartsWith(appDir, StringComparison.OrdinalIgnoreCase)))
+                                {
+                                    isOurNode = true;
+                                }
+                            }
+                            catch { }
+                        }
+
+                        if (isOurNode)
                         {
                             SafeKillProcess(p);
                         }
