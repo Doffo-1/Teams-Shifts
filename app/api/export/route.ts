@@ -192,12 +192,14 @@ export async function GET(req: Request) {
     }
 
     const buffer = await workbook.xlsx.writeBuffer();
-    const teamSlug = team ? `_${team.slug}` : '';
+    const teamSlug = team?.slug ? `_${team.slug}` : '';
 
-    return new NextResponse(buffer, {
+    return new Response(new Uint8Array(buffer as ArrayBuffer), {
+      status: 200,
       headers: {
         'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         'Content-Disposition': `attachment; filename="shifts${teamSlug}_${format(start, 'yyyy-MM-dd')}.xlsx"`,
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
       },
     });
   } catch (error: any) {

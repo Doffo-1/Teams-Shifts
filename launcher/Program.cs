@@ -435,7 +435,7 @@ namespace TeamsShiftsLauncher
                         {
                             if (exitOnWindowClose)
                             {
-                                ExitApplication();
+                                HandleBrowserExit();
                             }
                         };
 
@@ -449,7 +449,7 @@ namespace TeamsShiftsLauncher
                             catch { }
                             if (exitOnWindowClose)
                             {
-                                ExitApplication();
+                                HandleBrowserExit();
                             }
                         });
                     }
@@ -690,6 +690,78 @@ namespace TeamsShiftsLauncher
             }
             catch { }
         }
+
+        #region Windows Window Detection Interop
+        [DllImport("user32.dll", SetLastError = true)]
+        static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+        delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        static extern bool IsWindowVisible(IntPtr hWnd);
+
+        private static bool HasActiveAppWindows()
+        {
+            bool found = false;
+            try
+            {
+                EnumWindows(delegate(IntPtr hWnd, IntPtr lParam)
+                {
+                    try
+                    {
+                        if (IsWindowVisible(hWnd))
+                        {
+                            StringBuilder sb = new StringBuilder(256);
+                            GetWindowText(hWnd, sb, 256);
+                            string title = sb.ToString();
+                            if (!string.IsNullOrEmpty(title) && title.IndexOf("Teams Shifts", StringComparison.OrdinalIgnoreCase) >= 0)
+                            {
+                                found = true;
+                                return false; // Stop enumeration
+                            }
+                        }
+                    }
+                    catch { }
+                    return true;
+                }, IntPtr.Zero);
+            }
+            catch { }
+            return found;
+        }
+
+        private static void HandleBrowserExit()
+        {
+            try
+            {
+                string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                string flagFile = Path.Combine(localAppData, "TeamsShifts", "updates", ".updating");
+                if (File.Exists(flagFile))
+                {
+                    Thread.Sleep(3000);
+                    try { File.Delete(flagFile); } catch { }
+                    ExitApplication();
+                    return;
+                }
+            }
+            catch { }
+
+            Thread.Sleep(1500);
+
+            // While any Teams Shifts window is still open (e.g. popout Version window), wait
+            while (HasActiveAppWindows())
+            {
+                Thread.Sleep(1500);
+            }
+
+            if (exitOnWindowClose)
+            {
+                ExitApplication();
+            }
+        }
+        #endregion
 
         #region Windows Job Object Interop
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]

@@ -47,6 +47,8 @@ import {
   HardDrive,
   CalendarCheck,
   Repeat,
+  Play,
+  RotateCcw,
 } from 'lucide-react';
 
 
@@ -250,6 +252,156 @@ export default function Home() {
     }, 1500);
     return () => clearTimeout(timer);
   }, []);
+
+  interface DownloadProgress {
+    status: 'idle' | 'downloading' | 'completed' | 'error';
+    progress: number;
+    downloadedBytes: number;
+    totalBytes: number;
+    downloadedFormatted?: string;
+    totalFormatted?: string;
+    speed: string;
+    fileName: string;
+    version: string;
+    filePath: string;
+    assetType: 'installer' | 'portable';
+    error: string | null;
+  }
+  const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
+  const [isApplyingUpdate, setIsApplyingUpdate] = useState(false);
+  const [applySuccess, setApplySuccess] = useState(false);
+  const [exporting, setExporting] = useState(false);
+
+  const pollDownloadStatus = async (): Promise<DownloadProgress | null> => {
+    try {
+      const res = await fetch('/api/version/download');
+      if (res.ok) {
+        const data: DownloadProgress = await res.json();
+        setDownloadProgress(data);
+        return data;
+      }
+    } catch {}
+    return null;
+  };
+
+  const startInAppDownload = async (assetType: 'installer' | 'portable') => {
+    try {
+      const res = await fetch('/api/version/download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          assetType,
+          version: updateInfo?.latestVersion || 'latest',
+          downloadUrl: assetType === 'portable' ? updateInfo?.portableUrl : updateInfo?.downloadUrl,
+          repo: customRepo || updateInfo?.repo,
+        }),
+      });
+      if (res.ok) {
+        setDownloadProgress({
+          status: 'downloading',
+          progress: 0,
+          downloadedBytes: 0,
+          totalBytes: 0,
+          speed: 'Starting...',
+          fileName: assetType === 'portable' ? 'TeamsShifts-Standalone.zip' : 'TeamsShifts-Setup.exe',
+          version: updateInfo?.latestVersion || '',
+          filePath: '',
+          assetType,
+          error: null,
+        });
+      }
+    } catch (err) {
+      console.error('Failed to start in-app download:', err);
+    }
+  };
+
+  const cancelInAppDownload = async () => {
+    try {
+      await fetch('/api/version/download', { method: 'DELETE' });
+      setDownloadProgress(null);
+    } catch (err) {
+      console.error('Failed to cancel download:', err);
+    }
+  };
+
+  const applyUpdate = async (assetType: 'installer' | 'portable') => {
+    setIsApplyingUpdate(true);
+    try {
+      const res = await fetch('/api/version/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          assetType,
+          filePath: downloadProgress?.filePath,
+        }),
+      });
+      if (res.ok) {
+        setApplySuccess(true);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        showToast(data.error || 'Failed to start update installer', 'error');
+        setIsApplyingUpdate(false);
+      }
+    } catch (err: any) {
+      showToast(err?.message || 'Failed to apply update', 'error');
+      setIsApplyingUpdate(false);
+    }
+  };
+
+  useEffect(() => {
+    if (versionModalOpen) {
+      pollDownloadStatus();
+    }
+  }, [versionModalOpen]);
+
+  useEffect(() => {
+    let timer: NodeJS.Timeout;
+    if (downloadProgress?.status === 'downloading') {
+      timer = setInterval(async () => {
+        const data = await pollDownloadStatus();
+        if (data && (data.status === 'completed' || data.status === 'error')) {
+          clearInterval(timer);
+        }
+      }, 500);
+    }
+    return () => clearInterval(timer);
+  }, [downloadProgress?.status]);
+
+  const handleExport = async () => {
+    const teamId = selectedTeamId || currentTeam?.id;
+    setExporting(true);
+    try {
+      const res = await fetch(`/api/export?date=${start.toISOString()}&teamId=${teamId || ''}`);
+      if (!res.ok) {
+        let errMsg = 'Failed to generate Excel export';
+        try {
+          const errData = await res.json();
+          if (errData?.error) errMsg = errData.error;
+        } catch {}
+        throw new Error(errMsg);
+      }
+      const blob = await res.blob();
+      const disposition = res.headers.get('Content-Disposition') || '';
+      let fileName = `shifts_${format(start, 'yyyy-MM-dd')}.xlsx`;
+      const match = disposition.match(/filename="?([^";]+)"?/i);
+      if (match && match[1]) fileName = match[1];
+
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      showToast('Schedule exported successfully!', 'success');
+    } catch (err: any) {
+      console.error('Export error:', err);
+      showToast(`Export failed: ${err.message || 'Unknown error'}`, 'error');
+    } finally {
+      setExporting(false);
+    }
+  };
 
   // Team creation / edit form
   const [teamFormName, setTeamFormName] = useState('');
@@ -1447,14 +1599,14 @@ export default function Home() {
             <input type="file" accept=".xlsx" onChange={handleImport} style={{ display: 'none' }} />
           </label>
 
-          <a
-            suppressHydrationWarning
-            href={`/api/export?date=${start.toISOString()}&teamId=${selectedTeamId}`}
+          <button
             className="btn btn-secondary"
+            onClick={handleExport}
+            disabled={exporting}
             title="Export to Microsoft Teams Shifts Excel format"
           >
-            <Upload size={16} /> Export
-          </a>
+            <Upload size={16} className={exporting ? 'spin-icon' : ''} /> {exporting ? 'Exporting...' : 'Export'}
+          </button>
 
           {/* In-App Version & Update Pill */}
           <button
@@ -2695,48 +2847,175 @@ export default function Home() {
                     </div>
                   </div>
 
-                  {/* Dual Download Action Cards if update is available or download options */}
-                  <div style={{ marginBottom: '1.25rem' }}>
-                    <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--slate-300)', marginBottom: '0.6rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                      {updateInfo?.hasUpdate ? 'Choose Installation Package' : 'Available Downloads & Reinstalls'}
+                  {/* SECTION: IN-APP DOWNLOADING & APPLYING WORKFLOW */}
+                  {applySuccess ? (
+                    <div className="in-app-download-ready-card" style={{ textAlign: 'center', padding: '1.75rem 1.5rem', marginBottom: '1.25rem' }}>
+                      <CheckCircle2 size={36} color="#34d399" style={{ margin: '0 auto 0.75rem auto' }} />
+                      <h3 style={{ fontSize: '1.15rem', fontWeight: 800, color: 'white', marginBottom: '0.35rem' }}>
+                        Update Starting Now!
+                      </h3>
+                      <p style={{ fontSize: '0.85rem', color: 'var(--slate-300)', maxWidth: 480, margin: '0 auto' }}>
+                        Teams Shifts is closing down gracefully so the setup installer can update all files without file locks. The application will relaunch automatically after installation.
+                      </p>
                     </div>
-
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-                      {/* Windows Installer Setup.exe */}
-                      <a
-                        href={updateInfo?.downloadUrl || `https://github.com/${updateInfo?.repo || 'Doffo-1/Teams-Shifts'}/releases/latest/download/TeamsShifts-Setup.exe`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="btn version-btn-glow"
-                        style={{ padding: '0.85rem 1rem', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', textAlign: 'left', textDecoration: 'none', borderRadius: 10 }}
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', marginBottom: 4 }}>
-                          <span style={{ fontSize: '0.9rem', fontWeight: 700 }}>Windows Setup (.exe)</span>
-                          <Download size={16} />
+                  ) : downloadProgress?.status === 'downloading' ? (
+                    /* IN-APP DOWNLOADING PROGRESS CARD */
+                    <div className="in-app-download-card">
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <div style={{ width: 34, height: 34, borderRadius: 8, background: 'rgba(56, 189, 248, 0.2)', border: '1px solid rgba(56, 189, 248, 0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#38bdf8' }}>
+                            <Download size={18} className="pulse-icon" />
+                          </div>
+                          <div>
+                            <div style={{ fontWeight: 700, fontSize: '0.9rem', color: 'white' }}>
+                              Downloading {downloadProgress.fileName} In-App...
+                            </div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--slate-400)' }}>
+                              {downloadProgress.downloadedFormatted || '0 B'} / {downloadProgress.totalFormatted || '...'} {downloadProgress.speed ? `• ${downloadProgress.speed}` : ''}
+                            </div>
+                          </div>
                         </div>
-                        <span style={{ fontSize: '0.72rem', color: 'rgba(255, 255, 255, 0.85)', fontWeight: 400 }}>
-                          Recommended • Desktop installer with Start Menu & Shortcuts
-                        </span>
-                      </a>
-
-                      {/* Standalone Portable ZIP */}
-                      <a
-                        href={updateInfo?.portableUrl || `https://github.com/${updateInfo?.repo || 'Doffo-1/Teams-Shifts'}/releases/latest/download/TeamsShifts-Standalone.zip`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="btn btn-secondary"
-                        style={{ padding: '0.85rem 1rem', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', textAlign: 'left', textDecoration: 'none', borderRadius: 10, background: 'rgba(30, 41, 59, 0.8)', borderColor: 'rgba(71, 85, 105, 0.6)' }}
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', marginBottom: 4 }}>
-                          <span style={{ fontSize: '0.9rem', fontWeight: 700, color: 'white' }}>Portable Edition (.zip)</span>
-                          <Download size={16} />
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                          <span style={{ fontFamily: 'monospace', fontWeight: 800, color: '#38bdf8', fontSize: '1.1rem' }}>
+                            {downloadProgress.progress}%
+                          </span>
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            style={{ padding: '0.25rem 0.6rem', fontSize: '0.72rem' }}
+                            onClick={cancelInAppDownload}
+                          >
+                            Cancel
+                          </button>
                         </div>
-                        <span style={{ fontSize: '0.72rem', color: 'var(--slate-400)', fontWeight: 400 }}>
-                          Zero installation • Extract and launch anywhere
-                        </span>
-                      </a>
+                      </div>
+                      <div className="download-progress-track">
+                        <div className="download-progress-bar" style={{ width: `${Math.max(4, downloadProgress.progress)}%` }} />
+                      </div>
                     </div>
-                  </div>
+                  ) : downloadProgress?.status === 'completed' ? (
+                    /* IN-APP READY TO APPLY CARD */
+                    <div className="in-app-download-ready-card">
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                          <div style={{ width: 40, height: 40, borderRadius: 10, background: 'rgba(16, 185, 129, 0.2)', border: '1px solid rgba(16, 185, 129, 0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#34d399' }}>
+                            <CheckCircle2 size={22} />
+                          </div>
+                          <div>
+                            <div style={{ fontWeight: 800, fontSize: '0.95rem', color: 'white', display: 'flex', alignItems: 'center', gap: 8 }}>
+                              {downloadProgress.fileName} Downloaded & Ready
+                              <span className="badge" style={{ background: 'rgba(16, 185, 129, 0.2)', color: '#6ee7b7', border: '1px solid rgba(16, 185, 129, 0.3)', fontSize: '0.7rem' }}>
+                                {downloadProgress.version || updateInfo?.latestVersion}
+                              </span>
+                            </div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--slate-300)', marginTop: 2 }}>
+                              Downloaded completely in-app. Ready to apply cleanly without file locks.
+                            </div>
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <button
+                            type="button"
+                            className="btn"
+                            style={{ padding: '0.65rem 1.25rem', fontWeight: 700, fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: 8, background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)', color: 'white', borderRadius: 8, border: '1px solid #059669', boxShadow: '0 4px 15px rgba(16, 185, 129, 0.3)' }}
+                            onClick={() => applyUpdate(downloadProgress.assetType)}
+                            disabled={isApplyingUpdate}
+                          >
+                            <Play size={16} className={isApplyingUpdate ? 'spin-icon' : ''} />
+                            {isApplyingUpdate
+                              ? 'Closing app & launching setup...'
+                              : downloadProgress.assetType === 'portable'
+                              ? '⚡ Apply Portable Update & Restart'
+                              : '🚀 Install & Restart (Closes App & Runs Setup)'}
+                          </button>
+
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            style={{ padding: '0.65rem 0.8rem', fontSize: '0.8rem' }}
+                            onClick={cancelInAppDownload}
+                            title="Download different version or package"
+                          >
+                            <RotateCcw size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    /* IN-APP PACKAGE SELECTION CARDS */
+                    <div style={{ marginBottom: '1.25rem' }}>
+                      <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--slate-300)', marginBottom: '0.6rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                        {updateInfo?.hasUpdate ? 'Choose Installation Package' : 'Available Downloads & Reinstalls'}
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                        {/* Windows Setup Card */}
+                        <div style={{ background: 'rgba(30, 41, 59, 0.6)', border: '1px solid rgba(59, 130, 246, 0.3)', borderRadius: 10, padding: '1rem', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+                          <div>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                              <span style={{ fontSize: '0.92rem', fontWeight: 700, color: 'white' }}>Windows Setup (.exe)</span>
+                              <span className="badge" style={{ background: 'rgba(59, 130, 246, 0.2)', color: '#93c5fd', border: '1px solid rgba(59, 130, 246, 0.3)', fontSize: '0.65rem' }}>Recommended</span>
+                            </div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--slate-300)', marginBottom: '0.85rem' }}>
+                              Installs to Program Files with desktop and Start Menu shortcuts.
+                            </div>
+                          </div>
+
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                            <button
+                              type="button"
+                              className="btn version-btn-glow"
+                              onClick={() => startInAppDownload('installer')}
+                              style={{ padding: '0.55rem 0.8rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+                            >
+                              <Download size={14} /> Download In-App
+                            </button>
+                            <a
+                              href={updateInfo?.downloadUrl || `https://github.com/${updateInfo?.repo || 'Doffo-1/Teams-Shifts'}/releases/latest/download/TeamsShifts-Setup.exe`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              style={{ fontSize: '0.68rem', color: 'var(--slate-400)', textAlign: 'center', textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}
+                            >
+                              <ExternalLink size={11} /> Save via browser instead
+                            </a>
+                          </div>
+                        </div>
+
+                        {/* Portable Edition Card */}
+                        <div style={{ background: 'rgba(30, 41, 59, 0.6)', border: '1px solid rgba(71, 85, 105, 0.5)', borderRadius: 10, padding: '1rem', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+                          <div>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                              <span style={{ fontSize: '0.92rem', fontWeight: 700, color: 'white' }}>Portable Edition (.zip)</span>
+                              <span className="badge" style={{ background: 'rgba(148, 163, 184, 0.15)', color: '#cbd5e1', border: '1px solid rgba(148, 163, 184, 0.25)', fontSize: '0.65rem' }}>Zero Install</span>
+                            </div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--slate-300)', marginBottom: '0.85rem' }}>
+                              Standalone zip folder. Extract anywhere and launch TeamsShifts.exe directly.
+                            </div>
+                          </div>
+
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              onClick={() => startInAppDownload('portable')}
+                              style={{ padding: '0.55rem 0.8rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, borderColor: 'rgba(71, 85, 105, 0.6)' }}
+                            >
+                              <Download size={14} /> Download In-App
+                            </button>
+                            <a
+                              href={updateInfo?.portableUrl || `https://github.com/${updateInfo?.repo || 'Doffo-1/Teams-Shifts'}/releases/latest/download/TeamsShifts-Standalone.zip`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              style={{ fontSize: '0.68rem', color: 'var(--slate-400)', textAlign: 'center', textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}
+                            >
+                              <ExternalLink size={11} /> Save via browser instead
+                            </a>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Highlights of latest enhancements */}
                   <div style={{ background: 'rgba(15, 23, 42, 0.6)', border: '1px solid rgba(51, 65, 85, 0.5)', borderRadius: 12, padding: '1rem 1.15rem' }}>
