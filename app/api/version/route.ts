@@ -42,6 +42,7 @@ async function checkViaWebRedirect(repo: string) {
           releaseName: `Release ${rawTag}`,
           releaseUrl: location,
           downloadUrl: `https://github.com/${repo}/releases/download/${rawTag}/TeamsShifts-Setup.exe`,
+          portableUrl: `https://github.com/${repo}/releases/download/${rawTag}/TeamsShifts-Standalone.zip`,
         };
       }
     }
@@ -61,6 +62,7 @@ export async function GET(request: Request) {
     releaseNotes: '',
     releaseUrl: '',
     downloadUrl: '',
+    portableUrl: '',
     publishedAt: '',
     repo: repo,
     lastChecked: new Date().toISOString(),
@@ -106,11 +108,17 @@ export async function GET(request: Request) {
 
       // Locate standalone zip or exe asset
       if (Array.isArray(release.assets)) {
-        const zipAsset = release.assets.find((a: any) =>
-          typeof a.name === 'string' && (a.name.endsWith('.zip') || a.name.endsWith('.exe'))
+        const exeAsset = release.assets.find((a: any) =>
+          typeof a.name === 'string' && a.name.endsWith('.exe')
         );
-        if (zipAsset && zipAsset.browser_download_url) {
-          responseData.downloadUrl = zipAsset.browser_download_url;
+        const zipAsset = release.assets.find((a: any) =>
+          typeof a.name === 'string' && a.name.endsWith('.zip')
+        );
+        if (exeAsset?.browser_download_url) {
+          responseData.downloadUrl = exeAsset.browser_download_url;
+        }
+        if (zipAsset?.browser_download_url) {
+          responseData.portableUrl = zipAsset.browser_download_url;
         }
       }
 
@@ -126,6 +134,7 @@ export async function GET(request: Request) {
         responseData.releaseName = fallback.releaseName;
         responseData.releaseUrl = fallback.releaseUrl;
         responseData.downloadUrl = fallback.downloadUrl;
+        responseData.portableUrl = fallback.portableUrl;
         responseData.error = null;
       } else if (res.status === 404) {
         responseData.error = 'No releases published yet on this repository.';
