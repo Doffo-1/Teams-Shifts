@@ -15,7 +15,7 @@ model Team {
   description     String?
   exportGroupName String            @default("Team Shifts")
   breakMinutes    Int               @default(30)
-  groups          String            @default("[{\"id\":\"DEFAULT\",\"name\":\"Team Members\"},{\"id\":\"NIET_IN_DE_LIJN\",\"name\":\"Niet in de lijn\"}]")
+  groups          String            @default("[{\"id\":\"DEFAULT\",\"name\":\"Team Members\"}]")
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
 

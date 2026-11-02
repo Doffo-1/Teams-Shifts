@@ -36,3 +36,4 @@ To release a new version:
 ```
 Or simply double-click `publish.bat`.
 GitHub Actions will automatically build the standalone package, compile the installer, and publish the release.
+

@@ -21,7 +21,6 @@ function parseGroups(groupsJson?: string | null): GroupItem[] {
   }
   return [
     { id: 'DEFAULT', name: 'Team Members' },
-    { id: 'NIET_IN_DE_LIJN', name: 'Niet in de lijn' },
   ];
 }
 
@@ -36,7 +35,6 @@ async function getTeamGroups(teamId: string): Promise<GroupItem[]> {
   }
   return [
     { id: 'DEFAULT', name: 'Team Members' },
-    { id: 'NIET_IN_DE_LIJN', name: 'Niet in de lijn' },
   ];
 }
 

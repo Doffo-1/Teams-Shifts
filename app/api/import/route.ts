@@ -148,8 +148,7 @@ export async function POST(req: Request) {
 
         let assignedGroup = 'DEFAULT';
         if (row.group) {
-          if (row.group.toLowerCase().includes('niet in de lijn')) assignedGroup = 'NIET_IN_DE_LIJN';
-          else assignedGroup = row.group;
+          assignedGroup = row.group;
         }
 
         if (!employee) {

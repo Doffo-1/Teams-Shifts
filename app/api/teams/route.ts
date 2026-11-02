@@ -96,7 +96,6 @@ export async function POST(req: Request) {
         : JSON.stringify(groups)
       : JSON.stringify([
           { id: 'DEFAULT', name: 'Team Members' },
-          { id: 'NIET_IN_DE_LIJN', name: 'Niet in de lijn' },
         ]);
     try {
       await prisma.$executeRawUnsafe(`UPDATE "Team" SET "groups" = ? WHERE id = ?`, initialGroups, team.id);

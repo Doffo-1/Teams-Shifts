@@ -46,3 +46,4 @@ body:
       label: Logs / Error Output
       description: Relevant logs from `data\server.log` or browser console if available.
       render: shell
+

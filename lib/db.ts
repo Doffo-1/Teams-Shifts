@@ -21,7 +21,7 @@ export async function ensureDefaultData() {
     const hasGroups = tableInfo.some(col => col.name === 'groups');
     if (!hasGroups) {
       await prisma.$executeRawUnsafe(
-        `ALTER TABLE "Team" ADD COLUMN "groups" TEXT DEFAULT '[{"id":"DEFAULT","name":"Team Members"},{"id":"NIET_IN_DE_LIJN","name":"Niet in de lijn"}]'`
+        `ALTER TABLE "Team" ADD COLUMN "groups" TEXT DEFAULT '[{"id":"DEFAULT","name":"Team Members"}]'`
       );
     }
   } catch (error) {

@@ -248,7 +248,6 @@ export default function Home() {
     if (!list || list.length === 0) {
       list = [
         { id: 'DEFAULT', name: 'Team Members' },
-        { id: 'NIET_IN_DE_LIJN', name: 'Niet in de lijn' },
       ];
     }
     // Also include any groups that employees currently have if not yet listed
@@ -257,7 +256,7 @@ export default function Home() {
       if (!list.some(g => g.id === gId)) {
         list.push({
           id: gId,
-          name: gId === 'DEFAULT' ? 'Team Members' : gId === 'NIET_IN_DE_LIJN' ? 'Niet in de lijn' : gId,
+          name: gId === 'DEFAULT' ? 'Team Members' : gId,
         });
       }
     }
@@ -1593,7 +1592,7 @@ export default function Home() {
                     required
                     autoFocus
                     className="input"
-                    placeholder="e.g. Front Office, Niet in de lijn, Stagiaires..."
+                    placeholder="e.g. Front Office, Back Office, Interns..."
                     value={newGroupName}
                     onChange={e => setNewGroupName(e.target.value)}
                   />
@@ -2424,7 +2423,7 @@ function RulesModal({
                 </button>
               </div>
 
-              <table className="schedule-table" style={{ borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
+              <table className="schedule-table" style={{ width: '100%', minWidth: '100%', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
                 <thead>
                   <tr>
                     <th style={{ background: 'var(--slate-800)' }}>Group Name</th>

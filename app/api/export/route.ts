@@ -192,19 +192,16 @@ export async function GET(req: Request) {
             const found = Array.isArray(parsed) ? parsed.find((g: any) => g.id === shift.employee.group) : null;
             if (found && found.name) {
               exportGroup = found.name;
-            } else if (shift.employee.group === 'NIET_IN_DE_LIJN') {
-              exportGroup = 'Niet in de lijn';
+
             } else if (shift.employee.group !== 'DEFAULT') {
               exportGroup = shift.employee.group;
             }
-          } else if (shift.employee.group === 'NIET_IN_DE_LIJN') {
-            exportGroup = 'Niet in de lijn';
+
           } else if (shift.employee.group !== 'DEFAULT') {
             exportGroup = shift.employee.group;
           }
         } catch {
-          if (shift.employee.group === 'NIET_IN_DE_LIJN') exportGroup = 'Niet in de lijn';
-          else if (shift.employee.group !== 'DEFAULT') exportGroup = shift.employee.group;
+          if (shift.employee.group !== 'DEFAULT') exportGroup = shift.employee.group;
         }
       }
 
