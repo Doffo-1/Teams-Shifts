@@ -1,0 +1,56 @@
+# Dependencies
+/node_modules
+/.pnp
+.pnp.*
+
+# Testing
+/coverage
+
+# Next.js
+/.next/
+/out/
+
+# Production
+/build
+
+# Misc & OS
+.DS_Store
+Thumbs.db
+*.pem
+
+# Debug logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Environment files
+.env*.local
+.env
+
+# Vercel & IDE
+.vercel
+.vscode
+.idea
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
+# Databases & local data
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+data/*.db
+data/*.db-journal
+
+# Excel files (keep base template)
+*.xlsx
+!ImportScheduleTemplate*.xlsx
+temp_excel/
+
+# Standalone desktop builds and archives
+standalone-app/
+*.zip

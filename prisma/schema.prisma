@@ -1,0 +1,110 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Team {
+  id              String            @id @default(cuid())
+  name            String
+  slug            String            @unique
+  description     String?
+  exportGroupName String            @default("Team Shifts")
+  breakMinutes    Int               @default(30)
+  groups          String            @default("[{\"id\":\"DEFAULT\",\"name\":\"Team Members\"},{\"id\":\"NIET_IN_DE_LIJN\",\"name\":\"Niet in de lijn\"}]")
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  rule            TeamRule?
+  employees       Employee[]
+  shiftTypes      ShiftTypeConfig[]
+}
+
+model TeamRule {
+  id                    String   @id @default(cuid())
+  teamId                String   @unique
+  team                  Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  // Scheduling Constraints
+  maxOfficeDaysPerWeek  Int      @default(3)
+  maxLateShiftsPerWeek  Int      @default(3)
+  
+  // 0=Sunday, 1=Monday, 2=Tuesday, 3=Wednesday, 4=Thursday, 5=Friday, 6=Saturday, -1=None
+  priorityDayOfWeek     Int      @default(4)
+  
+  // JSON map of day-of-week (1-5) to target office percentage (e.g. {"1":50,"2":50,"3":50,"4":100,"5":50})
+  dailyOfficeTargets    String   @default("{\"1\":50,\"2\":50,\"3\":50,\"4\":100,\"5\":50}")
+  
+  // Minimum required staff per day
+  minOfficeEarlyPerDay  Int      @default(1)
+  minLatePerDay         Int      @default(2)
+  
+  // JSON array of active schedule days (e.g. [1,2,3,4,5] for Mon-Fri)
+  workingDays           String   @default("[1,2,3,4,5]")
+  
+  autoBalanceShiftTypes Boolean  @default(true)
+  autoBalanceLocations  Boolean  @default(true)
+
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+}
+
+model ShiftTypeConfig {
+  id           String   @id @default(cuid())
+  teamId       String
+  team         Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  code         String
+  label        String
+  defaultStart String   @default("08:00")
+  defaultEnd   String   @default("16:30")
+  themeColor   String   @default("5. Pink")
+  isSystem     Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([teamId, code])
+}
+
+model Employee {
+  id              String    @id @default(cuid())
+  teamId          String?
+  team            Team?     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  name            String
+  email           String    @default("")
+  group           String    @default("DEFAULT")
+  isActive        Boolean   @default(true)
+
+  // Configurable Constraints per Employee
+  allowedLocation String    @default("ANY") // "ANY" | "HOME_ONLY" | "OFFICE_ONLY"
+  fixedOffDays    String    @default("[]")  // JSON array of day numbers (e.g. [5] for Friday)
+  maxOfficeDays   Int?                      // Override team limit if set
+  maxLateShifts   Int?                      // Override team limit if set
+  autoSchedule    Boolean   @default(true)  // Whether auto-fill schedules this member
+  preferredShift  String    @default("ANY") // "ANY" | "EARLY" | "LATE"
+
+  shifts          Shift[]
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+model Shift {
+  id          String    @id @default(cuid())
+  employeeId  String
+  employee    Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  date        DateTime
+  type        String
+  location    String
+  isManual    Boolean   @default(false)
+  customStart String?
+  customEnd   String?
+  notes       String?
+  color       String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([employeeId, date])
+}

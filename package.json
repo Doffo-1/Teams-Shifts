@@ -1,0 +1,36 @@
+{
+  "name": "teams-shifts",
+  "version": "1.0.0",
+  "description": "Intelligent multi-team Microsoft Teams Shifts Generator with configurable rules engine and Authentik SSO",
+  "private": true,
+  "license": "MIT",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "next dev --webpack -H 0.0.0.0 -p 3000",
+    "build": "next build",
+    "start": "next start -H 0.0.0.0 -p 3000",
+    "lint": "eslint",
+    "electron:dev": "next build && electron .",
+    "electron:build": "next build && electron-builder --config electron/builder.json"
+  },
+  "dependencies": {
+    "next": "16.2.9",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "@prisma/client": "^5.10.0",
+    "date-fns": "^3.6.0",
+    "exceljs": "^4.4.0",
+    "lucide-react": "^0.359.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.9",
+    "typescript": "^5",
+    "prisma": "^5.10.0",
+    "electron": "^30.0.0",
+    "electron-builder": "^24.13.0"
+  }
+}

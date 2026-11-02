@@ -1,0 +1,101 @@
+name: Build and Release Standalone Desktop App
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version tag (e.g. v1.1.0)'
+        required: false
+        default: 'v1.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile=false
+
+      - name: Build Next.js Standalone
+        run: pnpm run build
+        env:
+          DATABASE_URL: "file:./data/shifts.db"
+          NODE_ENV: production
+          NEXT_TELEMETRY_DISABLED: 1
+
+      - name: Compile Standalone Executable
+        run: |
+          $csc = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+          & $csc /target:winexe /optimize+ /platform:anycpu "/win32icon:launcher/app.ico" "/win32manifest:launcher/app.manifest" /r:System.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll "/out:TeamsShifts.exe" launcher/Program.cs
+
+      - name: Package Standalone App
+        run: |
+          New-Item -ItemType Directory -Path dist/TeamsShifts/app -Force
+          New-Item -ItemType Directory -Path dist/TeamsShifts/data -Force
+          New-Item -ItemType Directory -Path dist/TeamsShifts/runtime -Force
+
+          # Copy binaries and assets
+          Copy-Item "TeamsShifts.exe" "dist/TeamsShifts/TeamsShifts.exe"
+          Copy-Item "launcher/app.ico" "dist/TeamsShifts/app.ico"
+          Copy-Item "launcher/run-console.bat" "dist/TeamsShifts/run-console.bat"
+          Copy-Item "launcher/README.txt" "dist/TeamsShifts/README.txt"
+
+          # Copy compiled Next.js standalone server
+          Copy-Item -Recurse ".next/standalone/*" "dist/TeamsShifts/app/"
+          Copy-Item -Recurse ".next/static" "dist/TeamsShifts/app/.next/static"
+          Copy-Item -Recurse "public" "dist/TeamsShifts/app/public"
+
+          # Copy Node.js portable runtime
+          $nodePath = (Get-Command node).Source
+          Copy-Item $nodePath "dist/TeamsShifts/runtime/node.exe"
+
+          # Create blank initialized SQLite database with zero teams
+          & node -e "const { PrismaClient } = require('./dist/TeamsShifts/app/node_modules/@prisma/client'); const p = new PrismaClient({ datasources: { db: { url: 'file:./dist/TeamsShifts/data/shifts.db' } } }); (async () => { await p.\$executeRawUnsafe('CREATE TABLE IF NOT EXISTS Team (id TEXT PRIMARY KEY, name TEXT NOT NULL, exportGroupName TEXT NOT NULL DEFAULT \'Team Shifts\', breakMinutes INTEGER NOT NULL DEFAULT 30, groups TEXT NOT NULL DEFAULT \'[]\', createdAt DATETIME DEFAULT CURRENT_TIMESTAMP, updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP);'); console.log('DB init'); })();"
+
+          # Create ZIP Archive
+          Compress-Archive -Path "dist/TeamsShifts/*" -DestinationPath "TeamsShifts-Standalone.zip"
+
+      - name: Determine Release Tag
+        id: release_info
+        run: |
+          if ("${{ github.ref_type }}" -eq "tag") {
+            echo "tag=${{ github.ref_name }}" >> $env:GITHUB_OUTPUT
+            echo "is_prerelease=false" >> $env:GITHUB_OUTPUT
+          } elseif ("${{ github.event_name }}" -eq "workflow_dispatch" -and "${{ inputs.version }}") {
+            echo "tag=${{ inputs.version }}" >> $env:GITHUB_OUTPUT
+            echo "is_prerelease=false" >> $env:GITHUB_OUTPUT
+          } else {
+            echo "tag=latest" >> $env:GITHUB_OUTPUT
+            echo "is_prerelease=false" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Create or Update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: TeamsShifts-Standalone.zip
+          tag_name: ${{ steps.release_info.outputs.tag }}
+          name: Release ${{ steps.release_info.outputs.tag }}
+          draft: false
+          prerelease: ${{ steps.release_info.outputs.is_prerelease }}
+          generate_release_notes: true
