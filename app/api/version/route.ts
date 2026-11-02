@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import { APP_VERSION, DEFAULT_GITHUB_REPO } from '@/lib/version';
 
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 function parseSemver(v: string): number[] {
   const cleaned = v.trim().replace(/^v/i, '').split('-')[0];
   const parts = cleaned.split('.').map(p => {
@@ -24,9 +27,11 @@ function isNewerVersion(latest: string, current: string): boolean {
 
 async function checkViaAtomFeed(repo: string) {
   try {
-    const res = await fetch(`https://github.com/${repo}/releases.atom`, {
+    const res = await fetch(`https://github.com/${repo}/releases.atom?t=${Date.now()}`, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
       },
       cache: 'no-store',
     });
@@ -52,11 +57,13 @@ async function checkViaAtomFeed(repo: string) {
 
 async function checkViaWebRedirect(repo: string) {
   try {
-    const webRes = await fetch(`https://github.com/${repo}/releases/latest`, {
+    const webRes = await fetch(`https://github.com/${repo}/releases/latest?t=${Date.now()}`, {
       redirect: 'manual',
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'text/html',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
       },
       cache: 'no-store',
     });
@@ -98,7 +105,13 @@ export async function GET(request: Request) {
   };
 
   if (!repo || repo === 'your-username/teams-shifts') {
-    return NextResponse.json(responseData);
+    return NextResponse.json(responseData, {
+    headers: {
+      'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+    },
+  });
   }
 
   try {
@@ -117,7 +130,7 @@ export async function GET(request: Request) {
     const res = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
       headers,
       signal: controller.signal,
-      next: { revalidate: 300 },
+      cache: 'no-store',
     });
 
     clearTimeout(timeoutId);
@@ -212,5 +225,11 @@ export async function GET(request: Request) {
     }
   }
 
-  return NextResponse.json(responseData);
+  return NextResponse.json(responseData, {
+    headers: {
+      'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+    },
+  });
 }

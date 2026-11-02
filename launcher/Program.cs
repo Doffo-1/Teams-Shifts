@@ -127,32 +127,42 @@ namespace TeamsShiftsLauncher
             {
                 if (WaitForServerReady(30000))
                 {
-                    // Optional background check for updates
-                    try
+                    // Background updater: checks on startup and continuously every 2 minutes
+                    bool balloonShown = false;
+                    while (!isCleanedUp)
                     {
-                        Thread.Sleep(3000);
-                        HttpWebRequest vReq = (HttpWebRequest)WebRequest.Create(appUrl + "/api/version");
-                        vReq.Proxy = null;
-                        vReq.Timeout = 5000;
-                        using (HttpWebResponse vResp = (HttpWebResponse)vReq.GetResponse())
+                        try
                         {
-                            if (vResp.StatusCode == HttpStatusCode.OK)
+                            HttpWebRequest vReq = (HttpWebRequest)WebRequest.Create(appUrl + "/api/version?t=" + DateTime.UtcNow.Ticks);
+                            vReq.Proxy = null;
+                            vReq.Timeout = 5000;
+                            using (HttpWebResponse vResp = (HttpWebResponse)vReq.GetResponse())
                             {
-                                using (StreamReader reader = new StreamReader(vResp.GetResponseStream()))
+                                if (vResp.StatusCode == HttpStatusCode.OK)
                                 {
-                                    string json = reader.ReadToEnd();
-                                    if (json.Contains("\"hasUpdate\":true") || json.Contains("\"hasUpdate\": true"))
+                                    using (StreamReader reader = new StreamReader(vResp.GetResponseStream()))
                                     {
-                                        if (trayIcon != null)
+                                        string json = reader.ReadToEnd();
+                                        if (json.Contains("\"hasUpdate\":true") || json.Contains("\"hasUpdate\": true"))
                                         {
-                                            trayIcon.ShowBalloonTip(7000, "Teams Shifts Update Available", "A new update is available! Click here or open the app to download.", ToolTipIcon.Info);
+                                            if (trayIcon != null && !balloonShown)
+                                            {
+                                                balloonShown = true;
+                                                trayIcon.ShowBalloonTip(7000, "Teams Shifts Update Available", "A new update is available! Click here or open the app to download.", ToolTipIcon.Info);
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
+                        catch { }
+
+                        // Re-check every 2 minutes while app is running
+                        for (int i = 0; i < 120 && !isCleanedUp; i++)
+                        {
+                            Thread.Sleep(1000);
+                        }
                     }
-                    catch { }
                 }
                 else
                 {

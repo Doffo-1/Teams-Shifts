@@ -66,7 +66,10 @@ export default function VersionPage() {
   const checkForUpdates = async () => {
     setCheckingUpdate(true);
     try {
-      const res = await fetch('/api/version');
+      const res = await fetch(`/api/version?t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache, no-store' },
+      });
       if (res.ok) {
         const data = await res.json();
         setUpdateInfo(data);
@@ -157,6 +160,21 @@ export default function VersionPage() {
   useEffect(() => {
     checkForUpdates();
     pollDownloadStatus();
+
+    // Background check every 45s while version page is open
+    const interval = setInterval(() => {
+      checkForUpdates();
+    }, 45000);
+
+    const handleFocus = () => {
+      checkForUpdates();
+    };
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', handleFocus);
+    };
   }, []);
 
   // Polling loop while downloading

@@ -230,8 +230,14 @@ export default function Home() {
   const checkForUpdates = async (repoOverride?: string) => {
     setCheckingUpdate(true);
     try {
-      const url = repoOverride ? `/api/version?repo=${encodeURIComponent(repoOverride)}` : '/api/version';
-      const res = await fetch(url);
+      const ts = Date.now();
+      const url = repoOverride
+        ? `/api/version?repo=${encodeURIComponent(repoOverride)}&t=${ts}`
+        : `/api/version?t=${ts}`;
+      const res = await fetch(url, {
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache, no-store' },
+      });
       if (res.ok) {
         const data = await res.json();
         setUpdateInfo(data);
@@ -247,10 +253,27 @@ export default function Home() {
   };
 
   useEffect(() => {
+    // 1. Initial check shortly after load
     const timer = setTimeout(() => {
       checkForUpdates();
     }, 1500);
-    return () => clearTimeout(timer);
+
+    // 2. Periodic background check every 60 seconds so new updates appear automatically without refresh
+    const interval = setInterval(() => {
+      checkForUpdates();
+    }, 60000);
+
+    // 3. Instant check when window regains focus (switching back from another window/browser)
+    const handleFocus = () => {
+      checkForUpdates();
+    };
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      clearTimeout(timer);
+      clearInterval(interval);
+      window.removeEventListener('focus', handleFocus);
+    };
   }, []);
 
   interface DownloadProgress {
@@ -350,6 +373,7 @@ export default function Home() {
 
   useEffect(() => {
     if (versionModalOpen) {
+      checkForUpdates();
       pollDownloadStatus();
     }
   }, [versionModalOpen]);
