@@ -90,11 +90,17 @@ export async function PUT(req: Request) {
       return NextResponse.json({ error: 'Employee ID is required' }, { status: 400 });
     }
 
+    if (name !== undefined) {
+      if (!name || typeof name !== 'string' || !name.trim()) {
+        return NextResponse.json({ error: 'Member name cannot be empty' }, { status: 400 });
+      }
+    }
+
     const updated = await prisma.employee.update({
       where: { id },
       data: {
-        ...(name ? { name: name.trim() } : {}),
-        ...(email ? { email: email.trim() } : {}),
+        ...(name !== undefined ? { name: name.trim() } : {}),
+        ...(email !== undefined ? { email: typeof email === 'string' ? email.trim() : '' } : {}),
         ...(group !== undefined ? { group } : {}),
         ...(teamId !== undefined ? { teamId } : {}),
         ...(allowedLocation !== undefined ? { allowedLocation } : {}),

@@ -926,7 +926,7 @@ export default function Home() {
     }
   };
 
-  // Update Member Constraints
+  // Update Member Details & Constraints
   const saveMemberConstraints = async (emp: Employee) => {
     try {
       const res = await fetch('/api/employees', {
@@ -937,11 +937,14 @@ export default function Home() {
       if (res.ok) {
         setMemberEditModalOpen(null);
         await loadData();
-        showToast(`Updated rules for ${emp.name}`);
+        showToast(`Updated member details for ${emp.name}`);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        showToast(data.error || 'Failed to update member', 'error');
       }
     } catch (err) {
       console.error(err);
-      showToast('Failed to update member rules', 'error');
+      showToast('Failed to update member details', 'error');
     }
   };
 
@@ -1416,7 +1419,12 @@ export default function Home() {
                 <tr key={emp.id}>
                   <td className="member-cell">
                     <div className="member-info">
-                      <div className="member-profile">
+                      <div
+                        className="member-profile"
+                        onClick={() => setMemberEditModalOpen(emp)}
+                        style={{ cursor: 'pointer' }}
+                        title={`Click to edit ${emp.name}'s name, email, or schedule rules`}
+                      >
                         <div className="avatar">{emp.name.charAt(0).toUpperCase()}</div>
                         <div className="member-details">
                           <span className="member-name" title={emp.name}>{emp.name}</span>
@@ -1443,6 +1451,13 @@ export default function Home() {
                         </div>
                       </div>
                       <div className="member-actions">
+                        <button
+                          className="action-btn"
+                          onClick={() => setMemberEditModalOpen(emp)}
+                          title={`Rename ${emp.name} or change email`}
+                        >
+                          <Edit2 size={15} />
+                        </button>
                         <button
                           className="action-btn"
                           onClick={() => setMemberEditModalOpen(emp)}
@@ -2140,6 +2155,10 @@ export default function Home() {
           onOpenRenameGroup={(groupId, currentName) => {
             setRenameGroupModalOpen({ id: groupId, name: currentName });
             setRenameGroupName(currentName);
+          }}
+          onEditMember={(emp) => {
+            setRulesModalOpen(false);
+            setMemberEditModalOpen(emp);
           }}
         />
       )}
@@ -3465,6 +3484,7 @@ function RulesModal({
   onOpenAddGroup,
   onPromptDeleteGroup,
   onOpenRenameGroup,
+  onEditMember,
 }: {
   team: Team;
   employees: Employee[];
@@ -3476,6 +3496,7 @@ function RulesModal({
   onOpenAddGroup: () => void;
   onPromptDeleteGroup: (groupId: string, groupName: string, count: number) => void;
   onOpenRenameGroup: (groupId: string, currentName: string) => void;
+  onEditMember?: (emp: Employee) => void;
 }) {
   const [maxOffice, setMaxOffice] = useState(team.rule?.maxOfficeDaysPerWeek ?? 3);
   const [maxLate, setMaxLate] = useState(team.rule?.maxLateShiftsPerWeek ?? 3);
@@ -3763,7 +3784,31 @@ function RulesModal({
 
                     return (
                       <tr key={emp.id}>
-                        <td style={{ fontWeight: 600, color: 'white' }}>{emp.name}</td>
+                        <td style={{ fontWeight: 600, color: 'white' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+                            <div>
+                              <div
+                                style={{ cursor: onEditMember ? 'pointer' : 'default', color: 'white' }}
+                                onClick={() => onEditMember?.(emp)}
+                                title={onEditMember ? `Click to edit ${emp.name}'s name, email, or schedule` : undefined}
+                              >
+                                {emp.name}
+                              </div>
+                              {emp.email && <div style={{ fontSize: '0.72rem', color: 'var(--slate-400)', fontWeight: 400 }}>{emp.email}</div>}
+                            </div>
+                            {onEditMember && (
+                              <button
+                                type="button"
+                                className="action-btn"
+                                style={{ padding: '0.2rem 0.35rem', minWidth: 'auto', background: 'rgba(255, 255, 255, 0.05)' }}
+                                onClick={() => onEditMember(emp)}
+                                title={`Edit ${emp.name}`}
+                              >
+                                <Edit2 size={13} style={{ color: 'var(--primary)' }} />
+                              </button>
+                            )}
+                          </div>
+                        </td>
                         <td>
                           <span className={`member-tag ${emp.allowedLocation === 'HOME_ONLY' ? 'tag-home' : emp.allowedLocation === 'OFFICE_ONLY' ? 'tag-office' : ''}`}>
                             {emp.allowedLocation === 'HOME_ONLY' ? 'Home Only' : emp.allowedLocation === 'OFFICE_ONLY' ? 'Office Only' : 'Flexible (Any)'}
@@ -3918,6 +3963,8 @@ function MemberEditModal({
   onClose: () => void;
   onSave: (emp: Employee) => void;
 }) {
+  const [name, setName] = useState(employee.name || '');
+  const [email, setEmail] = useState(employee.email || '');
   const [allowedLocation, setAllowedLocation] = useState(employee.allowedLocation || 'ANY');
   const [breakMinutes, setBreakMinutes] = useState<string>(
     employee.breakMinutes !== null && employee.breakMinutes !== undefined ? String(employee.breakMinutes) : ''
@@ -3991,6 +4038,12 @@ function MemberEditModal({
   };
 
   const handleSave = () => {
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      alert('Member name cannot be empty');
+      return;
+    }
+
     const fixedOffs: number[] = [];
     for (let d = 1; d <= 5; d++) {
       if (schedulePatterns[d]?.type === 'OFF') {
@@ -4000,6 +4053,8 @@ function MemberEditModal({
 
     onSave({
       ...employee,
+      name: trimmedName,
+      email: email.trim(),
       allowedLocation,
       fixedOffDays: JSON.stringify(fixedOffs),
       fixedDaySchedule: JSON.stringify(schedulePatterns),
@@ -4025,13 +4080,57 @@ function MemberEditModal({
     <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="modal-content" style={{ maxWidth: '620px' }}>
         <div className="modal-header">
-          <h2><UserCheck size={18} /> Rules & Schedule for {employee.name}</h2>
+          <h2><UserCheck size={18} /> Edit Member & Rules: {name.trim() || employee.name}</h2>
           <button onClick={onClose} style={{ color: 'var(--slate-400)' }}>
             <X size={20} />
           </button>
         </div>
 
         <div className="modal-body" style={{ maxHeight: '80vh', overflowY: 'auto' }}>
+          {/* Member Profile Details */}
+          <div style={{ background: 'rgba(30, 41, 59, 0.45)', padding: '1rem', borderRadius: 'var(--radius)', border: '1px solid var(--border)', marginBottom: '1rem' }}>
+            <div style={{ fontWeight: 600, color: 'white', fontSize: '0.875rem', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+              <Edit2 size={16} style={{ color: 'var(--primary)' }} />
+              Member Profile Details
+            </div>
+            <div className="form-grid">
+              <div>
+                <label className="label">Full Name *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. John Doe"
+                  className="input"
+                  value={name}
+                  onChange={e => setName(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="label">Email Address</label>
+                <input
+                  type="email"
+                  placeholder="e.g. john.doe@company.com"
+                  className="input"
+                  value={email}
+                  onChange={e => setEmail(e.target.value)}
+                />
+              </div>
+            </div>
+            <div style={{ marginTop: '0.75rem' }}>
+              <label className="label">Group / Department</label>
+              <select
+                className="input"
+                value={group}
+                onChange={e => setGroup(e.target.value)}
+              >
+                {teamGroups.map(g => (
+                  <option key={g.id} value={g.id}>
+                    {g.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
           {/* General Constraints Grid */}
           <div className="form-grid">
             <div>
@@ -4365,22 +4464,6 @@ function MemberEditModal({
             </div>
           </div>
 
-          {/* Subgroup */}
-          <div>
-            <label className="label">Group / Department</label>
-            <select
-              className="input"
-              value={group}
-              onChange={e => setGroup(e.target.value)}
-            >
-              {teamGroups.map(g => (
-                <option key={g.id} value={g.id}>
-                  {g.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
           {/* Auto-Schedule Toggle */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(30, 41, 59, 0.4)', padding: '0.75rem 1rem', borderRadius: 'var(--radius)' }}>
             <div>
@@ -4421,8 +4504,8 @@ function MemberEditModal({
           <button type="button" className="btn btn-secondary" onClick={onClose}>
             Cancel
           </button>
-          <button type="button" className="btn btn-primary" onClick={handleSave}>
-            Save Rules & Schedule
+          <button type="button" className="btn btn-primary" onClick={handleSave} disabled={!name.trim()}>
+            Save Member Details & Rules
           </button>
         </div>
       </div>
