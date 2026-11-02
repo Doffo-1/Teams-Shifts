@@ -71,7 +71,7 @@ jobs:
       - name: Compile Standalone Executable
         run: |
           $csc = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
-          & $csc /target:winexe /optimize+ /platform:anycpu "/win32icon:launcher\app.ico" "/win32manifest:launcher\app.manifest" /r:System.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll "/out:TeamsShifts.exe" "launcher\Program.cs"
+          & $csc /target:winexe /optimize+ /platform:anycpu "/win32icon:launcher\app.ico" "/win32manifest:launcher\app.manifest" /r:System.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll "/out:TeamsShifts.exe" "launcher\Program.cs" "launcher\AssemblyInfo.cs"
 
       - name: Package Standalone App
         run: |

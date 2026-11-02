@@ -569,7 +569,7 @@ namespace TeamsShiftsLauncher
                             browserProcess.CloseMainWindow();
                             if (!browserProcess.WaitForExit(1000))
                             {
-                                KillProcessTree(browserProcess.Id);
+                                SafeKillProcess(browserProcess);
                             }
                         }
                     }
@@ -577,25 +577,15 @@ namespace TeamsShiftsLauncher
                     browserProcess = null;
                 }
 
-                // 3. Terminate the background Node server and its process tree
+                // 3. Terminate the background Node server
                 if (nodeProcess != null)
                 {
-                    try
-                    {
-                        if (!nodeProcess.HasExited)
-                        {
-                            KillProcessTree(nodeProcess.Id);
-                        }
-                    }
-                    catch { }
+                    SafeKillProcess(nodeProcess);
                     nodeProcess = null;
                 }
 
                 // 4. Terminate any lingering node.exe instances running under this app directory
                 KillAppNodeProcesses();
-
-                // 5. Terminate any remaining process occupying activePort
-                KillProcessesOnPort(activePort);
 
                 // 6. Close Windows Job Object handle
                 if (jobHandle != IntPtr.Zero)
@@ -622,41 +612,14 @@ namespace TeamsShiftsLauncher
             }
         }
 
-        private static void KillProcessTree(int pid)
+        private static void SafeKillProcess(Process p)
         {
+            if (p == null) return;
             try
             {
-                ProcessStartInfo psi = new ProcessStartInfo
+                if (!p.HasExited)
                 {
-                    FileName = "taskkill.exe",
-                    Arguments = string.Format("/F /T /PID {0}", pid),
-                    CreateNoWindow = true,
-                    UseShellExecute = false,
-                    WindowStyle = ProcessWindowStyle.Hidden
-                };
-                using (Process p = Process.Start(psi))
-                {
-                    p.WaitForExit(2000);
-                }
-            }
-            catch { }
-        }
-
-        private static void KillProcessesOnPort(int port)
-        {
-            try
-            {
-                ProcessStartInfo psi = new ProcessStartInfo
-                {
-                    FileName = "cmd.exe",
-                    Arguments = string.Format("/c for /f \"tokens=5\" %a in ('netstat -aon ^| findstr /r \":{0} \"') do @if not \"%a\"==\"\" taskkill /F /PID %a >nul 2>&1", port),
-                    CreateNoWindow = true,
-                    UseShellExecute = false,
-                    WindowStyle = ProcessWindowStyle.Hidden
-                };
-                using (Process p = Process.Start(psi))
-                {
-                    p.WaitForExit(2000);
+                    p.Kill();
                 }
             }
             catch { }
@@ -676,7 +639,7 @@ namespace TeamsShiftsLauncher
                         if (string.Equals(mainMod, localRuntime, StringComparison.OrdinalIgnoreCase) ||
                             mainMod.StartsWith(appDir, StringComparison.OrdinalIgnoreCase))
                         {
-                            KillProcessTree(p.Id);
+                            SafeKillProcess(p);
                         }
                     }
                     catch { }
