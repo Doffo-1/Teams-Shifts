@@ -113,16 +113,25 @@ jobs:
           if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) {
             choco install innosetup --no-progress
           }
+          $cmd = Get-Command iscc -ErrorAction SilentlyContinue
+          $cmdPath = if ($cmd) { $cmd.Source } else { $null }
           $isccCandidates = @(
-            (Get-Command iscc -ErrorAction SilentlyContinue)?.Source,
+            $cmdPath,
             "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
             "C:\Program Files\Inno Setup 6\ISCC.exe",
             "C:\ProgramData\chocolatey\bin\iscc.exe"
           )
-          $iscc = $isccCandidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+          $iscc = $null
+          foreach ($cand in $isccCandidates) {
+            if ($cand -and (Test-Path $cand)) {
+              $iscc = $cand
+              break
+            }
+          }
           if (-not $iscc) {
             throw "ISCC.exe not found"
           }
+          Write-Host "Using Inno Setup compiler: $iscc" -ForegroundColor Green
           $cleanVer = "${{ steps.release_info.outputs.clean_version }}"
           & $iscc "/DAppVersion=$cleanVer" "/DSourceDir=..\dist\TeamsShifts" "installer\setup.iss"
 
