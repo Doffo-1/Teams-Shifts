@@ -174,3 +174,4 @@ Write-Host "https://github.com/Doffo-1/Teams-Shifts/actions" -ForegroundColor Cy
 Write-Host " View releases at:       " -NoNewline
 Write-Host "https://github.com/Doffo-1/Teams-Shifts/releases" -ForegroundColor Cyan
 Write-Host ""
+

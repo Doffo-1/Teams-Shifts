@@ -26,9 +26,6 @@ set DATABASE_URL=file:%~dp0data\shifts.db
 set NODE_ENV=production
 set NEXT_TELEMETRY_DISABLED=1
 set TZ=Europe/Amsterdam
-set DEV_USER_USERNAME=developer
-set DEV_USER_NAME=Developer
-set DEV_USER_EMAIL=developer@example.com
 
 ping 127.0.0.1 -n 3 >nul
 start "" "http://127.0.0.1:3000"

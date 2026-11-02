@@ -42,15 +42,6 @@ import {
   RefreshCw,
 } from 'lucide-react';
 
-interface AuthUser {
-  id: string;
-  username: string;
-  name: string;
-  email: string;
-  groups: string[];
-  isAuthenticated: boolean;
-  isDev: boolean;
-}
 
 interface TeamRule {
   id: string;
@@ -125,7 +116,6 @@ export default function Home() {
   const [selectedTeamId, setSelectedTeamId] = useState<string>('');
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [shifts, setShifts] = useState<Shift[]>([]);
-  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -363,14 +353,6 @@ export default function Home() {
     }
     setGroupLoading(false);
   };
-
-  // Load Auth
-  useEffect(() => {
-    fetch('/api/auth/me')
-      .then(res => res.json())
-      .then(user => setAuthUser(user))
-      .catch(console.error);
-  }, []);
 
   // Load Teams
   const loadTeams = async () => {
@@ -1225,18 +1207,6 @@ export default function Home() {
           >
             <Upload size={16} /> Export
           </a>
-
-          {/* Authentik User Pill */}
-          {authUser && (
-            <div className="auth-profile-badge" title={`Authenticated via Authentik as ${authUser.email}`}>
-              <div className="auth-avatar">{authUser.name?.charAt(0).toUpperCase() || 'U'}</div>
-              <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.2 }}>
-                <span style={{ fontWeight: 600, color: 'white', fontSize: '0.75rem' }}>{authUser.name}</span>
-                <span style={{ fontSize: '0.65rem', color: 'var(--slate-400)' }}>Authentik SSO</span>
-              </div>
-              <div className="auth-sso-dot" />
-            </div>
-          )}
 
           {/* In-App Version & Update Pill */}
           <button

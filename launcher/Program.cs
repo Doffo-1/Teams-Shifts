@@ -33,6 +33,13 @@ namespace TeamsShiftsLauncher
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 
+            // Disable proxy resolution on loopback requests for maximum speed
+            try
+            {
+                WebRequest.DefaultWebProxy = null;
+            }
+            catch { }
+
             // Register global exit handlers to guarantee Cleanup() always runs
             Application.ApplicationExit += delegate { Cleanup(); };
             AppDomain.CurrentDomain.ProcessExit += delegate { Cleanup(); };
@@ -75,16 +82,19 @@ namespace TeamsShiftsLauncher
             // Setup Tray Icon
             SetupTrayIcon();
 
-            // Wait for server readiness in background, then open window
+            // Fast readiness detection: open window as soon as TCP port accepts connections
             ThreadPool.QueueUserWorkItem(delegate
             {
                 if (WaitForServerReady(30000))
                 {
                     OpenApplicationWindow();
+
+                    // Optional background check for updates
                     try
                     {
                         Thread.Sleep(3000);
                         HttpWebRequest vReq = (HttpWebRequest)WebRequest.Create(appUrl + "/api/version");
+                        vReq.Proxy = null;
                         vReq.Timeout = 5000;
                         using (HttpWebResponse vResp = (HttpWebResponse)vReq.GetResponse())
                         {
@@ -198,9 +208,6 @@ namespace TeamsShiftsLauncher
                 psi.EnvironmentVariables["NODE_ENV"] = "production";
                 psi.EnvironmentVariables["NEXT_TELEMETRY_DISABLED"] = "1";
                 psi.EnvironmentVariables["TZ"] = "Europe/Amsterdam";
-                psi.EnvironmentVariables["DEV_USER_USERNAME"] = "developer";
-                psi.EnvironmentVariables["DEV_USER_NAME"] = "Developer";
-                psi.EnvironmentVariables["DEV_USER_EMAIL"] = "developer@example.com";
 
                 nodeProcess = new Process { StartInfo = psi, EnableRaisingEvents = true };
 
@@ -261,7 +268,7 @@ namespace TeamsShiftsLauncher
         private static bool WaitForServerReady(int timeoutMs)
         {
             int elapsed = 0;
-            int interval = 250;
+            int interval = 50;
 
             while (elapsed < timeoutMs)
             {
@@ -270,24 +277,34 @@ namespace TeamsShiftsLauncher
                     return false;
                 }
 
+                // Check TCP port binding directly for sub-millisecond detection
                 try
                 {
-                    HttpWebRequest request = (HttpWebRequest)WebRequest.Create(appUrl);
-                    request.Timeout = 1000;
-                    request.Method = "GET";
-
-                    using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
+                    using (TcpClient tcp = new TcpClient())
                     {
-                        if (response.StatusCode == HttpStatusCode.OK ||
-                            response.StatusCode == HttpStatusCode.Found)
+                        IAsyncResult ar = tcp.BeginConnect("127.0.0.1", activePort, null, null);
+                        if (ar.AsyncWaitHandle.WaitOne(100, false))
                         {
-                            return true;
+                            tcp.EndConnect(ar);
+                            if (tcp.Connected)
+                            {
+                                // Port is accepting connections! Kick off warmup request in background
+                                try
+                                {
+                                    HttpWebRequest warmup = (HttpWebRequest)WebRequest.Create(appUrl);
+                                    warmup.Proxy = null;
+                                    warmup.Timeout = 1000;
+                                    warmup.BeginGetResponse(null, null);
+                                }
+                                catch { }
+                                return true;
+                            }
                         }
                     }
                 }
                 catch
                 {
-                    // Server not ready yet
+                    // Port not ready yet
                 }
 
                 Thread.Sleep(interval);
@@ -322,6 +339,15 @@ namespace TeamsShiftsLauncher
                     {
                         edgePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), @"Microsoft\Edge\Application\msedge.exe");
                     }
+                    if (!File.Exists(edgePath))
+                    {
+                        string edgeCoreBase = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), @"Microsoft\EdgeCore");
+                        if (Directory.Exists(edgeCoreBase))
+                        {
+                            string[] files = Directory.GetFiles(edgeCoreBase, "msedge.exe", SearchOption.AllDirectories);
+                            if (files.Length > 0) edgePath = files[0];
+                        }
+                    }
                     if (File.Exists(edgePath))
                     {
                         browserExe = edgePath;
@@ -331,8 +357,21 @@ namespace TeamsShiftsLauncher
                 // If app browser is found, run in dedicated standalone app-window mode
                 if (browserExe != null)
                 {
-                    string profileDir = Path.Combine(dataDir, "webview_profile");
-                    string browserArgs = string.Format("--app=\"{0}\" --user-data-dir=\"{1}\" --window-size=1380,880 --no-first-run", appUrl, profileDir);
+                    // Use fast local SSD directory (%LOCALAPPDATA%) instead of network SMB share
+                    string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                    string profileDir = Path.Combine(localAppData, "TeamsShifts", "profile");
+                    if (!Directory.Exists(profileDir))
+                    {
+                        try { Directory.CreateDirectory(profileDir); } catch { }
+                    }
+
+                    // Optimized flags to eliminate background checks and launch instantaneously
+                    string browserArgs = string.Format(
+                        "--app=\"{0}\" --user-data-dir=\"{1}\" --window-size=1380,880 " +
+                        "--no-first-run --no-default-browser-check --disable-background-networking " +
+                        "--disable-sync --disable-translate --disable-extensions --disable-component-update " +
+                        "--disable-default-apps --disable-features=Translate,OptimizationHints,MediaRouter",
+                        appUrl, profileDir);
 
                     ProcessStartInfo bPsi = new ProcessStartInfo
                     {
