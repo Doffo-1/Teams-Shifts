@@ -98,6 +98,11 @@ jobs:
             Copy-Item -Recurse "public" "dist/TeamsShifts/app/public"
           }
 
+          # Clean any dangling reparse points or broken symlinks if present
+          Get-ChildItem -Path "dist/TeamsShifts" -Recurse -Force -ErrorAction SilentlyContinue | Where-Object {
+            $_.LinkType -and (-not (Test-Path $_.FullName))
+          } | Remove-Item -Force -Recurse -ErrorAction SilentlyContinue
+
           # Copy Node.js portable runtime
           $nodePath = (Get-Command node).Source
           Copy-Item $nodePath "dist/TeamsShifts/runtime/node.exe"
@@ -111,15 +116,13 @@ jobs:
       - name: Build Windows Installer (Setup.exe)
         run: |
           if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) {
-            choco install innosetup --no-progress
+            choco install innosetup -y --no-progress
           }
-          $cmd = Get-Command iscc -ErrorAction SilentlyContinue
-          $cmdPath = if ($cmd) { $cmd.Source } else { $null }
           $isccCandidates = @(
-            $cmdPath,
             "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
             "C:\Program Files\Inno Setup 6\ISCC.exe",
-            "C:\ProgramData\chocolatey\bin\iscc.exe"
+            "C:\ProgramData\chocolatey\bin\iscc.exe",
+            (Get-Command iscc -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue)
           )
           $iscc = $null
           foreach ($cand in $isccCandidates) {
@@ -136,7 +139,7 @@ jobs:
           $absSource = (Resolve-Path "dist\TeamsShifts").Path
           $absIss = (Resolve-Path "installer\setup.iss").Path
           Write-Host "Compiling installer from $absIss with source $absSource..."
-          & $iscc "/DAppVersion=$cleanVer" "/DSourceDir=$absSource" $absIss
+          & $iscc "/DAppVersion=$cleanVer" "/DSourceDir=$absSource" "$absIss"
           if ($LASTEXITCODE -ne 0) {
             throw "ISCC compilation failed with exit code $LASTEXITCODE"
           }
