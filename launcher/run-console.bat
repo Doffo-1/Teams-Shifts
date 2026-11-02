@@ -30,7 +30,7 @@ set DEV_USER_USERNAME=developer
 set DEV_USER_NAME=Developer
 set DEV_USER_EMAIL=developer@example.com
 
-timeout /t 2 /nobreak >nul
+ping 127.0.0.1 -n 3 >nul
 start "" "http://127.0.0.1:3000"
 
 "%~dp0runtime\node.exe" "%~dp0app\server.js"
