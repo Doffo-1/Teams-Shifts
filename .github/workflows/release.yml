@@ -103,6 +103,21 @@ jobs:
             $_.LinkType -and (-not (Test-Path $_.FullName))
           } | Remove-Item -Force -Recurse -ErrorAction SilentlyContinue
 
+          # Fix Node 22 module-sync export condition in ExcelJS dependencies
+          $genReq = "import fn from './index.js';`r`nexport default fn;`r`nexport { fn as 'module.exports' };`r`n"
+          foreach ($pkg in @("generator-function", "async-function")) {
+            $pkgDir = "dist/TeamsShifts/app/node_modules/$pkg"
+            if (Test-Path $pkgDir) {
+              Set-Content -Path (Join-Path $pkgDir "require.mjs") -Value $genReq -NoNewline
+              $pj = Join-Path $pkgDir "package.json"
+              if (Test-Path $pj) {
+                $pjContent = Get-Content $pj -Raw
+                $pjContent = $pjContent -replace '"module-sync":\s*"[^"]*",?\s*', ''
+                Set-Content -Path $pj -Value $pjContent -NoNewline
+              }
+            }
+          }
+
           # Copy Node.js portable runtime
           $nodePath = (Get-Command node).Source
           Copy-Item $nodePath "dist/TeamsShifts/runtime/node.exe"
