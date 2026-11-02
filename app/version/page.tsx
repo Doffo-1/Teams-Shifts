@@ -291,10 +291,11 @@ export default function VersionPage() {
   }, [applyState?.logs, localLogs]);
 
   // Calculate master progress & active stages
-  const isUpdatingActive =
+  const isUpdatingActive = Boolean(
     isUpdating ||
     downloadProgress?.status === 'downloading' ||
-    (applyState && applyState.status !== 'idle' && applyState.status !== 'error');
+    (applyState && applyState.status !== 'idle' && applyState.status !== 'error')
+  );
 
   const downloadPct = downloadProgress?.progress || 0;
   let masterProgress = 0;
@@ -840,7 +841,7 @@ export default function VersionPage() {
             <button
               className="btn btn-secondary"
               onClick={checkForUpdates}
-              disabled={checkingUpdate || isUpdatingActive}
+              disabled={Boolean(checkingUpdate || isUpdatingActive)}
               style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem' }}
             >
               <RefreshCw size={15} className={checkingUpdate ? 'spin-icon' : ''} />

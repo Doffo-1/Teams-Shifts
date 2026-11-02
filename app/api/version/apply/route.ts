@@ -209,7 +209,7 @@ export async function POST(request: Request) {
             );
 
             let stderrData = '';
-            ps.stderr?.on('data', (d) => {
+            ps.stderr?.on('data', (d: Buffer | string) => {
               stderrData += d.toString();
             });
 

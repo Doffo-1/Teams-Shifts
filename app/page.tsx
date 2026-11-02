@@ -488,10 +488,11 @@ export default function Home() {
   }, [applyState?.logs, localModalLogs]);
 
   // Master modal update calculations
-  const isModalUpdatingActive =
+  const isModalUpdatingActive = Boolean(
     isUpdatingModal ||
     downloadProgress?.status === 'downloading' ||
-    (applyState && applyState.status !== 'idle' && applyState.status !== 'error');
+    (applyState && applyState.status !== 'idle' && applyState.status !== 'error')
+  );
 
   const modalDownloadPct = downloadProgress?.progress || 0;
   let modalMasterProgress = 0;
