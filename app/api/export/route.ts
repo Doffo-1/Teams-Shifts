@@ -1,8 +1,6 @@
 import { NextResponse } from 'next/server';
 import { prisma, ensureDefaultData } from '@/lib/db';
 import ExcelJS from 'exceljs';
-import fs from 'fs';
-import path from 'path';
 import { format, startOfWeek, addDays } from 'date-fns';
 
 export async function GET(req: Request) {
@@ -31,7 +29,7 @@ export async function GET(req: Request) {
       });
     }
 
-    const defaultExportGroup = team?.exportGroupName || 'Servicedesk';
+    const defaultExportGroup = team?.exportGroupName || team?.name || 'Team Members';
     const breakMinutes = team?.breakMinutes ?? 30;
 
     // Shift type hours map from team config
@@ -56,16 +54,10 @@ export async function GET(req: Request) {
     });
 
     const workbook = new ExcelJS.Workbook();
-    const templatePath = path.join(process.cwd(), 'ImportScheduleTemplate_c03feaf857b34bdcb4917de22655b403.xlsx');
-    if (fs.existsSync(templatePath)) {
-      await workbook.xlsx.readFile(templatePath);
-    }
-
-    let shiftsSheet = workbook.worksheets.find(ws => ws.name.trim().toLowerCase() === 'shifts');
-    if (!shiftsSheet) shiftsSheet = workbook.addWorksheet('Shifts');
-
-    let timeOffSheet = workbook.worksheets.find(ws => ws.name.trim().toLowerCase() === 'time off');
-    if (!timeOffSheet) timeOffSheet = workbook.addWorksheet('Time Off');
+    const shiftsSheet = workbook.addWorksheet('Shifts');
+    const timeOffSheet = workbook.addWorksheet('Time Off');
+    workbook.addWorksheet('Day notes');
+    workbook.addWorksheet('Open shifts');
 
     const columns = [
       { header: 'Member', key: 'member', width: 25 },
@@ -94,47 +86,11 @@ export async function GET(req: Request) {
       { header: 'Notes', key: 'notes', width: 40 },
     ];
 
-    const ensureHeader = (sheet: ExcelJS.Worksheet, cols: any[]) => {
-      const firstRow = sheet.getRow(1);
-      let vals: any[] = [];
-      if (Array.isArray(firstRow.values)) {
-        vals = firstRow.values;
-      } else if (firstRow.values && typeof firstRow.values === 'object') {
-        vals = Object.values(firstRow.values);
-      }
-      const hasMemberHeader = vals.some((v: any) => typeof v === 'string' && v.trim().toLowerCase() === 'member');
-      if (!hasMemberHeader) {
-        sheet.columns = cols;
-      } else {
-        cols.forEach((col, i) => {
-          sheet.getColumn(i + 1).key = col.key;
-        });
-      }
-    };
-
-    const clearDataRows = (sheet: ExcelJS.Worksheet) => {
-      if (sheet.rowCount > 1) {
-        sheet.spliceRows(2, sheet.rowCount);
-      }
-    };
-
-    ensureHeader(shiftsSheet, columns);
-    ensureHeader(timeOffSheet, timeOffColumns);
-
-    workbook.worksheets.forEach(sheet => {
-      const n = sheet.name.trim().toLowerCase();
-      if (n.includes('shifts') || n.includes('time off') || n.includes('day notes') || n.includes('open shift')) {
-        clearDataRows(sheet);
-      }
-    });
+    shiftsSheet.columns = columns;
+    timeOffSheet.columns = timeOffColumns;
 
     for (const shift of shifts) {
       if (shift.type === 'OFF') {
-        continue;
-      }
-
-      const empGroup = (shift.employee.group || '').toLowerCase();
-      if (empGroup.includes('sales') || empGroup.includes('manager')) {
         continue;
       }
 
@@ -173,9 +129,9 @@ export async function GET(req: Request) {
       } else if (shift.type === 'VACATION') {
         shiftLabel = 'Vacation';
       } else if (shift.location === 'OFFICE' || shift.location === 'Kantoor') {
-        displayNotes = (displayNotes ? displayNotes + ' ' : '') + 'Kantoor';
+        displayNotes = (displayNotes ? displayNotes + ' ' : '') + 'Office';
       } else if (shift.location === 'HOME' || shift.location === 'Thuis') {
-        displayNotes = (displayNotes ? displayNotes + ' ' : '') + 'Thuis';
+        displayNotes = (displayNotes ? displayNotes + ' ' : '') + 'Home';
       } else {
         shiftLabel = shift.location;
         if (!startTime) startTime = '08:30';
@@ -192,11 +148,9 @@ export async function GET(req: Request) {
             const found = Array.isArray(parsed) ? parsed.find((g: any) => g.id === shift.employee.group) : null;
             if (found && found.name) {
               exportGroup = found.name;
-
             } else if (shift.employee.group !== 'DEFAULT') {
               exportGroup = shift.employee.group;
             }
-
           } else if (shift.employee.group !== 'DEFAULT') {
             exportGroup = shift.employee.group;
           }

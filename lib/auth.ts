@@ -14,7 +14,7 @@ export async function getAuthUser(req?: Request): Promise<AuthUser> {
     username: 'user',
     name: 'User',
     email: 'user@example.com',
-    groups: ['admin', 'shifts-manager'],
+    groups: ['admin'],
     isAuthenticated: true,
     isDev: false,
   };

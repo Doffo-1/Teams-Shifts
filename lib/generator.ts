@@ -1,4 +1,4 @@
-import { addDays, startOfWeek, isSameDay, getDay } from 'date-fns';
+import { addDays, startOfWeek, isSameDay, getDay, format } from 'date-fns';
 
 export type ShiftType = 'EARLY' | 'LATE' | 'OFF' | 'CUSTOM' | 'SICK' | 'VACATION' | string;
 export type LocationType = 'HOME' | 'OFFICE' | string;
@@ -66,8 +66,8 @@ export function generateWeeklySchedule(
   const config: GeneratorRules = {
     maxOfficeDaysPerWeek: rules?.maxOfficeDaysPerWeek ?? 3,
     maxLateShiftsPerWeek: rules?.maxLateShiftsPerWeek ?? 3,
-    priorityDayOfWeek: rules?.priorityDayOfWeek ?? 4, // Thursday
-    dailyOfficeTargets: rules?.dailyOfficeTargets ?? '{"1":50,"2":50,"3":50,"4":100,"5":50}',
+    priorityDayOfWeek: rules?.priorityDayOfWeek ?? -1,
+    dailyOfficeTargets: rules?.dailyOfficeTargets ?? '{"1":50,"2":50,"3":50,"4":50,"5":50}',
     minOfficeEarlyPerDay: rules?.minOfficeEarlyPerDay ?? 1,
     minLatePerDay: rules?.minLatePerDay ?? 2,
     workingDays: rules?.workingDays ?? '[1,2,3,4,5]',
@@ -85,7 +85,7 @@ export function generateWeeklySchedule(
     workingDaysArray = [1, 2, 3, 4, 5];
   }
 
-  let targetsMap: Record<string, number> = { '1': 50, '2': 50, '3': 50, '4': 100, '5': 50 };
+  let targetsMap: Record<string, number> = { '1': 50, '2': 50, '3': 50, '4': 50, '5': 50 };
   try {
     targetsMap = JSON.parse(config.dailyOfficeTargets);
   } catch {
@@ -369,7 +369,7 @@ export function generateWeeklySchedule(
   const shiftsByDay: Record<string, { office: number; home: number; early: number; late: number; off: number }> = {};
   for (const dayOffset of workingDaysArray) {
     const curDate = addDays(start, dayOffset - 1);
-    const dateKey = curDate.toISOString().split('T')[0];
+    const dateKey = format(curDate, 'yyyy-MM-dd');
     const dayShifts = generatedShifts.filter(s => isSameDay(new Date(s.date), curDate));
 
     shiftsByDay[dateKey] = {

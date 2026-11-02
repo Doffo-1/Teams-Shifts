@@ -34,10 +34,10 @@ model TeamRule {
   maxLateShiftsPerWeek  Int      @default(3)
   
   // 0=Sunday, 1=Monday, 2=Tuesday, 3=Wednesday, 4=Thursday, 5=Friday, 6=Saturday, -1=None
-  priorityDayOfWeek     Int      @default(4)
+  priorityDayOfWeek     Int      @default(-1)
   
-  // JSON map of day-of-week (1-5) to target office percentage (e.g. {"1":50,"2":50,"3":50,"4":100,"5":50})
-  dailyOfficeTargets    String   @default("{\"1\":50,\"2\":50,\"3\":50,\"4\":100,\"5\":50}")
+  // JSON map of day-of-week (1-5) to target office percentage (e.g. {"1":50,"2":50,"3":50,"4":50,"5":50})
+  dailyOfficeTargets    String   @default("{\"1\":50,\"2\":50,\"3\":50,\"4\":50,\"5\":50}")
   
   // Minimum required staff per day
   minOfficeEarlyPerDay  Int      @default(1)

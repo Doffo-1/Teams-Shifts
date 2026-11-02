@@ -46,9 +46,8 @@ next-env.d.ts
 data/*.db
 data/*.db-journal
 
-# Excel files (keep base template)
+# Excel files
 *.xlsx
-!ImportScheduleTemplate*.xlsx
 temp_excel/
 
 # Standalone desktop builds and archives

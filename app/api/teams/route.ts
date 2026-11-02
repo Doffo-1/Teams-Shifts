@@ -64,8 +64,8 @@ export async function POST(req: Request) {
           create: {
             maxOfficeDaysPerWeek: 3,
             maxLateShiftsPerWeek: 3,
-            priorityDayOfWeek: 4,
-            dailyOfficeTargets: JSON.stringify({ '1': 50, '2': 50, '3': 50, '4': 100, '5': 50 }),
+            priorityDayOfWeek: -1,
+            dailyOfficeTargets: JSON.stringify({ '1': 50, '2': 50, '3': 50, '4': 50, '5': 50 }),
             minOfficeEarlyPerDay: 1,
             minLatePerDay: 2,
             workingDays: JSON.stringify([1, 2, 3, 4, 5]),

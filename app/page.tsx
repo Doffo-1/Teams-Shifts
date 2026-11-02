@@ -936,11 +936,11 @@ export default function Home() {
                                   <div className="loc-dot" />
                                   {shift.location === 'OFFICE' ? (
                                     <>
-                                      <Building size={11} /> Kantoor
+                                      <Building size={11} /> Office
                                     </>
                                   ) : shift.location === 'HOME' ? (
                                     <>
-                                      <HomeIcon size={11} /> Thuis
+                                      <HomeIcon size={11} /> Home
                                     </>
                                   ) : (
                                     shift.location
@@ -978,7 +978,7 @@ export default function Home() {
                       type="text"
                       autoFocus
                       className="input"
-                      placeholder="Full Name (e.g. John Doe)..."
+                      placeholder="Full Name..."
                       value={newEmpName}
                       onChange={e => setNewEmpName(e.target.value)}
                     />
@@ -1412,18 +1412,18 @@ export default function Home() {
                             className={modalData.location === 'OFFICE' || modalData.location === 'Kantoor' ? 'active-OFFICE' : ''}
                             onClick={() => setModalData({ ...modalData, location: 'OFFICE' })}
                           >
-                            <Building size={14} style={{ display: 'inline', marginRight: '4px' }} /> Kantoor (Office)
+                            <Building size={14} style={{ display: 'inline', marginRight: '4px' }} /> Office
                           </button>
                           <button
                             className={modalData.location === 'HOME' || modalData.location === 'Thuis' ? 'active-HOME' : ''}
                             onClick={() => setModalData({ ...modalData, location: 'HOME' })}
                           >
-                            <HomeIcon size={14} style={{ display: 'inline', marginRight: '4px' }} /> Thuis (Home)
+                            <HomeIcon size={14} style={{ display: 'inline', marginRight: '4px' }} /> Home
                           </button>
                         </div>
                         <input
                           type="text"
-                          placeholder="Or type a custom client/site location (e.g. HQ, HBTA, Amsterdam Office)"
+                          placeholder="Or type a custom client/site location (e.g. HQ, Amsterdam Office)"
                           className="input"
                           value={modalData.location === 'OFFICE' || modalData.location === 'HOME' ? '' : modalData.location}
                           onChange={e => setModalData({ ...modalData, location: e.target.value })}
@@ -1780,7 +1780,7 @@ export default function Home() {
                   <label className="label">MS Teams Export Group Name</label>
                   <input
                     type="text"
-                    placeholder="Defaults to team name (e.g. Servicedesk)"
+                    placeholder="Defaults to team name"
                     className="input"
                     value={teamFormExportGroup}
                     onChange={e => setTeamFormExportGroup(e.target.value)}
@@ -2107,15 +2107,22 @@ function RulesModal({
 }) {
   const [maxOffice, setMaxOffice] = useState(team.rule?.maxOfficeDaysPerWeek ?? 3);
   const [maxLate, setMaxLate] = useState(team.rule?.maxLateShiftsPerWeek ?? 3);
-  const [priorityDay, setPriorityDay] = useState(team.rule?.priorityDayOfWeek ?? 4);
+  const [priorityDay, setPriorityDay] = useState(
+    team.rule?.priorityDayOfWeek === 4 && team.rule?.dailyOfficeTargets?.includes('"4":100')
+      ? -1
+      : (team.rule?.priorityDayOfWeek ?? -1)
+  );
   const [minEarly, setMinEarly] = useState(team.rule?.minOfficeEarlyPerDay ?? 1);
   const [minLate, setMinLate] = useState(team.rule?.minLatePerDay ?? 2);
 
   // Parse daily targets
-  let initialTargets: Record<string, number> = { '1': 50, '2': 50, '3': 50, '4': 100, '5': 50 };
+  let initialTargets: Record<string, number> = { '1': 50, '2': 50, '3': 50, '4': 50, '5': 50 };
   try {
     if (team.rule?.dailyOfficeTargets) {
       initialTargets = JSON.parse(team.rule.dailyOfficeTargets);
+      if (initialTargets['4'] === 100 && initialTargets['1'] === 50 && initialTargets['2'] === 50 && initialTargets['3'] === 50 && initialTargets['5'] === 50) {
+        initialTargets['4'] = 50;
+      }
     }
   } catch {}
 
@@ -2147,16 +2154,16 @@ function RulesModal({
     setSaving(false);
   };
 
-  const setTargetPreset = (preset: 'standard' | 'equal' | 'heavy') => {
-    if (preset === 'standard') {
-      setTargets({ '1': 50, '2': 50, '3': 50, '4': 100, '5': 50 });
-      setPriorityDay(4);
-    } else if (preset === 'equal') {
+  const setTargetPreset = (preset: 'equal' | 'heavy' | 'full') => {
+    if (preset === 'equal') {
       setTargets({ '1': 50, '2': 50, '3': 50, '4': 50, '5': 50 });
       setPriorityDay(-1);
     } else if (preset === 'heavy') {
-      setTargets({ '1': 75, '2': 75, '3': 75, '4': 100, '5': 60 });
-      setPriorityDay(4);
+      setTargets({ '1': 75, '2': 75, '3': 75, '4': 75, '5': 75 });
+      setPriorityDay(-1);
+    } else if (preset === 'full') {
+      setTargets({ '1': 100, '2': 100, '3': 100, '4': 100, '5': 100 });
+      setPriorityDay(-1);
     }
   };
 
@@ -2210,14 +2217,14 @@ function RulesModal({
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(30, 41, 59, 0.4)', padding: '0.75rem 1rem', borderRadius: 'var(--radius)' }}>
                 <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--slate-300)' }}>Quick Presets:</span>
                 <div style={{ display: 'flex', gap: '0.5rem' }}>
-                  <button type="button" className="btn btn-secondary" style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }} onClick={() => setTargetPreset('standard')}>
-                    Thursday 100% / Others 50%
-                  </button>
                   <button type="button" className="btn btn-secondary" style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }} onClick={() => setTargetPreset('equal')}>
                     Equal 50% All Days
                   </button>
                   <button type="button" className="btn btn-secondary" style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }} onClick={() => setTargetPreset('heavy')}>
-                    Office Heavy 75%
+                    Office Heavy (75%)
+                  </button>
+                  <button type="button" className="btn btn-secondary" style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }} onClick={() => setTargetPreset('full')}>
+                    100% Office
                   </button>
                 </div>
               </div>
@@ -2268,11 +2275,11 @@ function RulesModal({
                     value={priorityDay}
                     onChange={e => setPriorityDay(Number(e.target.value))}
                   >
-                    <option value="-1">None (Normal order)</option>
+                    <option value="-1">None (Balanced evenly)</option>
                     <option value="1">Monday</option>
                     <option value="2">Tuesday</option>
                     <option value="3">Wednesday</option>
-                    <option value="4">Thursday (Default)</option>
+                    <option value="4">Thursday</option>
                     <option value="5">Friday</option>
                   </select>
                   <div style={{ fontSize: '0.75rem', color: 'var(--slate-400)', marginTop: '0.25rem' }}>
