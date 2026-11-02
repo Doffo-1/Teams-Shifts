@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import {
   format,
   addWeeks,
@@ -290,10 +290,38 @@ export default function Home() {
     assetType: 'installer' | 'portable';
     error: string | null;
   }
+
+  interface ApplyLog {
+    time: string;
+    text: string;
+    type?: 'info' | 'success' | 'warn' | 'error';
+  }
+
+  interface ApplyState {
+    status: 'idle' | 'preparing' | 'extracting' | 'verifying' | 'staging' | 'restarting' | 'error';
+    step: number;
+    totalSteps: number;
+    progress: number;
+    message: string;
+    detail: string;
+    logs: ApplyLog[];
+    error: string | null;
+    targetFile?: string;
+    assetType?: 'installer' | 'portable';
+  }
+
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
-  const [isApplyingUpdate, setIsApplyingUpdate] = useState(false);
-  const [applySuccess, setApplySuccess] = useState(false);
+  const [applyState, setApplyState] = useState<ApplyState | null>(null);
+  const [isUpdatingModal, setIsUpdatingModal] = useState(false);
+  const [selectedModalAssetType, setSelectedModalAssetType] = useState<'portable' | 'installer'>('portable');
+  const [localModalLogs, setLocalModalLogs] = useState<ApplyLog[]>([]);
+  const modalTerminalRef = useRef<HTMLDivElement>(null);
   const [exporting, setExporting] = useState(false);
+
+  const addModalLog = (text: string, type: 'info' | 'success' | 'warn' | 'error' = 'info') => {
+    const time = new Date().toTimeString().split(' ')[0];
+    setLocalModalLogs(prev => [...prev.slice(-30), { time, text, type }]);
+  };
 
   const pollDownloadStatus = async (): Promise<DownloadProgress | null> => {
     try {
@@ -307,7 +335,22 @@ export default function Home() {
     return null;
   };
 
+  const pollApplyStatus = async (): Promise<ApplyState | null> => {
+    try {
+      const res = await fetch('/api/version/apply');
+      if (res.ok) {
+        const data: ApplyState = await res.json();
+        setApplyState(data);
+        return data;
+      }
+    } catch {}
+    return null;
+  };
+
   const startInAppDownload = async (assetType: 'installer' | 'portable') => {
+    setSelectedModalAssetType(assetType);
+    setIsUpdatingModal(true);
+    addModalLog(`Starting download of ${assetType === 'portable' ? 'TeamsShifts-Standalone.zip' : 'TeamsShifts-Setup.exe'}...`, 'info');
     try {
       const res = await fetch('/api/version/download', {
         method: 'POST',
@@ -335,20 +378,26 @@ export default function Home() {
       }
     } catch (err) {
       console.error('Failed to start in-app download:', err);
+      addModalLog('Failed to start download stream', 'error');
     }
   };
 
-  const cancelInAppDownload = async () => {
+  const cancelModalUpdate = async () => {
     try {
       await fetch('/api/version/download', { method: 'DELETE' });
+      await fetch('/api/version/apply', { method: 'DELETE' });
       setDownloadProgress(null);
+      setApplyState(null);
+      setIsUpdatingModal(false);
+      addModalLog('Update cancelled by user', 'warn');
     } catch (err) {
-      console.error('Failed to cancel download:', err);
+      console.error('Failed to cancel update:', err);
     }
   };
 
   const applyUpdate = async (assetType: 'installer' | 'portable') => {
-    setIsApplyingUpdate(true);
+    setIsUpdatingModal(true);
+    addModalLog(`Initializing zero-shell silent updater for ${assetType}...`, 'info');
     try {
       const res = await fetch('/api/version/apply', {
         method: 'POST',
@@ -358,16 +407,26 @@ export default function Home() {
           filePath: downloadProgress?.filePath,
         }),
       });
-      if (res.ok) {
-        setApplySuccess(true);
-      } else {
+      if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        showToast(data.error || 'Failed to start update installer', 'error');
-        setIsApplyingUpdate(false);
+        addModalLog(`Update error: ${data.error || 'Failed to apply update'}`, 'error');
+        showToast(data.error || 'Failed to apply update', 'error');
+      } else {
+        addModalLog('Update pipeline running in background (zero console window)...', 'success');
       }
     } catch (err: any) {
+      addModalLog(`Apply request failed: ${err?.message || err}`, 'error');
       showToast(err?.message || 'Failed to apply update', 'error');
-      setIsApplyingUpdate(false);
+    }
+  };
+
+  const triggerOneClickUpdateModal = (assetType: 'installer' | 'portable') => {
+    setSelectedModalAssetType(assetType);
+    setIsUpdatingModal(true);
+    if (downloadProgress?.status === 'completed' && downloadProgress?.assetType === assetType) {
+      applyUpdate(assetType);
+    } else {
+      startInAppDownload(assetType);
     }
   };
 
@@ -375,21 +434,58 @@ export default function Home() {
     if (versionModalOpen) {
       checkForUpdates();
       pollDownloadStatus();
+      pollApplyStatus();
     }
   }, [versionModalOpen]);
 
+  // Polling loop while downloading
   useEffect(() => {
     let timer: NodeJS.Timeout;
     if (downloadProgress?.status === 'downloading') {
       timer = setInterval(async () => {
         const data = await pollDownloadStatus();
-        if (data && (data.status === 'completed' || data.status === 'error')) {
+        if (data?.status === 'completed') {
+          addModalLog(`Package ${data.fileName} downloaded successfully (${data.totalFormatted}).`, 'success');
+          if (isUpdatingModal && (!applyState || applyState.status === 'idle')) {
+            applyUpdate(data.assetType);
+          }
+          clearInterval(timer);
+        } else if (data?.status === 'error') {
+          addModalLog(`Download error: ${data.error}`, 'error');
           clearInterval(timer);
         }
       }, 500);
     }
     return () => clearInterval(timer);
-  }, [downloadProgress?.status]);
+  }, [downloadProgress?.status, isUpdatingModal, applyState?.status]);
+
+  // Polling loop while applying
+  useEffect(() => {
+    let timer: NodeJS.Timeout;
+    const isApplyingActive =
+      applyState &&
+      applyState.status !== 'idle' &&
+      applyState.status !== 'error';
+
+    if (isApplyingActive || isUpdatingModal) {
+      timer = setInterval(async () => {
+        const data = await pollApplyStatus();
+        if (data?.status === 'restarting') {
+          clearInterval(timer);
+        } else if (data?.status === 'error') {
+          clearInterval(timer);
+        }
+      }, 400);
+    }
+    return () => clearInterval(timer);
+  }, [applyState?.status, isUpdatingModal]);
+
+  // Auto-scroll modal terminal
+  useEffect(() => {
+    if (modalTerminalRef.current) {
+      modalTerminalRef.current.scrollTop = modalTerminalRef.current.scrollHeight;
+    }
+  }, [applyState?.logs, localModalLogs]);
 
   const handleExport = async () => {
     const teamId = selectedTeamId || currentTeam?.id;
@@ -2809,237 +2905,393 @@ export default function Home() {
               </div>
 
               {/* TAB 1: OVERVIEW & DOWNLOADS */}
-              {versionTab === 'overview' && (
-                <div>
-                  {/* Hero Leap Card */}
-                  <div className="version-hero-card">
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <div>
-                        <div style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#93c5fd' }}>
-                          SOFTWARE UPDATE STATUS
-                        </div>
-                        <div style={{ fontSize: '1.05rem', fontWeight: 700, color: 'white', marginTop: 3 }}>
-                          {checkingUpdate ? (
-                            'Querying GitHub Releases...'
-                          ) : updateInfo?.hasUpdate ? (
-                            `Newer Release Available: ${updateInfo.latestVersion}`
-                          ) : (
-                            'Teams Shifts is Completely Up to Date'
-                          )}
-                        </div>
-                      </div>
+              {versionTab === 'overview' && (() => {
+                const isModalUpdatingActive =
+                  isUpdatingModal ||
+                  downloadProgress?.status === 'downloading' ||
+                  (applyState && applyState.status !== 'idle' && applyState.status !== 'error');
 
-                      {checkingUpdate ? (
-                        <div className="version-badge-pill" style={{ background: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa', border: '1px solid rgba(59, 130, 246, 0.3)' }}>
-                          <RefreshCw size={12} className="spin-icon" /> Checking...
-                        </div>
-                      ) : updateInfo?.hasUpdate ? (
-                        <div className="version-badge-pill version-badge-update">
-                          <AlertCircle size={13} /> Update Available
-                        </div>
-                      ) : (
-                        <div className="version-badge-pill version-badge-success">
-                          <CheckCircle2 size={13} /> Current Active
-                        </div>
-                      )}
-                    </div>
+                const modalDownloadPct = downloadProgress?.progress || 0;
+                let modalMasterProgress = 0;
+                let modalStep = 1;
+                let modalStepTitle = 'Checking Update Status';
+                let modalStepDetail = 'Ready to begin in-app update';
 
-                    {/* Version Leap Row */}
-                    <div className="version-leap-row">
-                      <div style={{ display: 'flex', flexDirection: 'column' }}>
-                        <span style={{ fontSize: '0.72rem', color: 'var(--slate-400)', textTransform: 'uppercase', fontWeight: 600 }}>Installed Edition</span>
-                        <span style={{ fontSize: '1.15rem', fontWeight: 800, color: 'white', fontFamily: 'monospace' }}>
-                          v{updateInfo?.currentVersion || '1.0.4'}
-                        </span>
-                      </div>
+                if (downloadProgress?.status === 'downloading') {
+                  modalStep = 1;
+                  modalMasterProgress = Math.round(modalDownloadPct * 0.4);
+                  modalStepTitle = `Step 1 of 4: Downloading ${downloadProgress.fileName}`;
+                  modalStepDetail = `${downloadProgress.downloadedFormatted || '0 B'} / ${downloadProgress.totalFormatted || '...'} • ${downloadProgress.speed || 'Downloading...'}`;
+                } else if (applyState && applyState.status !== 'idle') {
+                  if (applyState.status === 'extracting') {
+                    modalStep = 2;
+                    modalMasterProgress = 40 + Math.round((applyState.progress / 100) * 25);
+                    modalStepTitle = 'Step 2 of 4: Unpacking Application Archive';
+                    modalStepDetail = applyState.detail || 'Extracting binaries and Next.js bundle to temporary staging area';
+                  } else if (applyState.status === 'verifying') {
+                    modalStep = 3;
+                    modalMasterProgress = 65 + Math.round((applyState.progress / 100) * 15);
+                    modalStepTitle = 'Step 3 of 4: Verifying Application Files';
+                    modalStepDetail = applyState.detail || 'Checking launcher binaries and securing database (shifts.db)';
+                  } else if (applyState.status === 'staging') {
+                    modalStep = 3;
+                    modalMasterProgress = 80 + Math.round((applyState.progress / 100) * 15);
+                    modalStepTitle = 'Step 3 of 4: Arming Zero-Shell Silent Runner';
+                    modalStepDetail = applyState.detail || 'Preparing silent background replacement script';
+                  } else if (applyState.status === 'restarting') {
+                    modalStep = 4;
+                    modalMasterProgress = 100;
+                    modalStepTitle = 'Step 4 of 4: Restarting Teams Shifts';
+                    modalStepDetail = 'Application will relaunch automatically in 2-3 seconds with new version';
+                  } else if (applyState.status === 'error') {
+                    modalStepTitle = 'Update Failed';
+                    modalStepDetail = applyState.error || 'An error occurred during update';
+                  }
+                } else if (downloadProgress?.status === 'completed') {
+                  modalStep = 2;
+                  modalMasterProgress = 40;
+                  modalStepTitle = 'Package Downloaded & Verified';
+                  modalStepDetail = `${downloadProgress.fileName} is ready to be applied.`;
+                }
 
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: updateInfo?.hasUpdate ? '#fbbf24' : 'var(--slate-500)' }}>
-                        <div style={{ height: 1, width: 32, background: 'currentColor' }} />
-                        <ArrowRight size={18} />
-                        <div style={{ height: 1, width: 32, background: 'currentColor' }} />
-                      </div>
+                const combinedModalLogs = [...localModalLogs];
+                if (applyState?.logs && applyState.logs.length > 0) {
+                  applyState.logs.forEach(l => {
+                    if (!combinedModalLogs.some(existing => existing.text === l.text && existing.time === l.time)) {
+                      combinedModalLogs.push(l);
+                    }
+                  });
+                }
 
-                      <div style={{ display: 'flex', flexDirection: 'column', textAlign: 'right' }}>
-                        <span style={{ fontSize: '0.72rem', color: 'var(--slate-400)', textTransform: 'uppercase', fontWeight: 600 }}>Latest Release</span>
-                        <span style={{ fontSize: '1.15rem', fontWeight: 800, color: updateInfo?.hasUpdate ? '#60a5fa' : '#34d399', fontFamily: 'monospace' }}>
-                          v{updateInfo?.latestVersion || updateInfo?.currentVersion || '1.0.4'}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* SECTION: IN-APP DOWNLOADING & APPLYING WORKFLOW */}
-                  {applySuccess ? (
-                    <div className="in-app-download-ready-card" style={{ textAlign: 'center', padding: '1.75rem 1.5rem', marginBottom: '1.25rem' }}>
-                      <CheckCircle2 size={36} color="#34d399" style={{ margin: '0 auto 0.75rem auto' }} />
-                      <h3 style={{ fontSize: '1.15rem', fontWeight: 800, color: 'white', marginBottom: '0.35rem' }}>
-                        Update Starting Now!
-                      </h3>
-                      <p style={{ fontSize: '0.85rem', color: 'var(--slate-300)', maxWidth: 480, margin: '0 auto' }}>
-                        Teams Shifts is closing down gracefully so the setup installer can update all files without file locks. The application will relaunch automatically after installation.
-                      </p>
-                    </div>
-                  ) : downloadProgress?.status === 'downloading' ? (
-                    /* IN-APP DOWNLOADING PROGRESS CARD */
-                    <div className="in-app-download-card">
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                          <div style={{ width: 34, height: 34, borderRadius: 8, background: 'rgba(56, 189, 248, 0.2)', border: '1px solid rgba(56, 189, 248, 0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#38bdf8' }}>
-                            <Download size={18} className="pulse-icon" />
-                          </div>
-                          <div>
-                            <div style={{ fontWeight: 700, fontSize: '0.9rem', color: 'white' }}>
-                              Downloading {downloadProgress.fileName} In-App...
+                return (
+                  <div>
+                    {/* If Update in Progress: Show Dedicated In-App Update Tracking Card */}
+                    {isModalUpdatingActive ? (
+                      <div className="update-screen-card">
+                        {/* Status Top Row */}
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.85rem' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <div style={{ width: 38, height: 38, borderRadius: 10, background: 'rgba(59, 130, 246, 0.2)', border: '1px solid rgba(59, 130, 246, 0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#60a5fa' }}>
+                              {applyState?.status === 'restarting' ? (
+                                <CheckCircle2 size={22} color="#34d399" />
+                              ) : (
+                                <RefreshCw size={20} className="spin-icon" />
+                              )}
                             </div>
-                            <div style={{ fontSize: '0.75rem', color: 'var(--slate-400)' }}>
-                              {downloadProgress.downloadedFormatted || '0 B'} / {downloadProgress.totalFormatted || '...'} {downloadProgress.speed ? `• ${downloadProgress.speed}` : ''}
-                            </div>
-                          </div>
-                        </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                          <span style={{ fontFamily: 'monospace', fontWeight: 800, color: '#38bdf8', fontSize: '1.1rem' }}>
-                            {downloadProgress.progress}%
-                          </span>
-                          <button
-                            type="button"
-                            className="btn btn-secondary"
-                            style={{ padding: '0.25rem 0.6rem', fontSize: '0.72rem' }}
-                            onClick={cancelInAppDownload}
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      </div>
-                      <div className="download-progress-track">
-                        <div className="download-progress-bar" style={{ width: `${Math.max(4, downloadProgress.progress)}%` }} />
-                      </div>
-                    </div>
-                  ) : downloadProgress?.status === 'completed' ? (
-                    /* IN-APP READY TO APPLY CARD */
-                    <div className="in-app-download-ready-card">
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                          <div style={{ width: 40, height: 40, borderRadius: 10, background: 'rgba(16, 185, 129, 0.2)', border: '1px solid rgba(16, 185, 129, 0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#34d399' }}>
-                            <CheckCircle2 size={22} />
-                          </div>
-                          <div>
-                            <div style={{ fontWeight: 800, fontSize: '0.95rem', color: 'white', display: 'flex', alignItems: 'center', gap: 8 }}>
-                              {downloadProgress.fileName} Downloaded & Ready
-                              <span className="badge" style={{ background: 'rgba(16, 185, 129, 0.2)', color: '#6ee7b7', border: '1px solid rgba(16, 185, 129, 0.3)', fontSize: '0.7rem' }}>
-                                {downloadProgress.version || updateInfo?.latestVersion}
-                              </span>
-                            </div>
-                            <div style={{ fontSize: '0.75rem', color: 'var(--slate-300)', marginTop: 2 }}>
-                              Downloaded completely in-app. Ready to apply cleanly without file locks.
-                            </div>
-                          </div>
-                        </div>
-
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <button
-                            type="button"
-                            className="btn"
-                            style={{ padding: '0.65rem 1.25rem', fontWeight: 700, fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: 8, background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)', color: 'white', borderRadius: 8, border: '1px solid #059669', boxShadow: '0 4px 15px rgba(16, 185, 129, 0.3)' }}
-                            onClick={() => applyUpdate(downloadProgress.assetType)}
-                            disabled={isApplyingUpdate}
-                          >
-                            <Play size={16} className={isApplyingUpdate ? 'spin-icon' : ''} />
-                            {isApplyingUpdate
-                              ? 'Closing app & launching setup...'
-                              : downloadProgress.assetType === 'portable'
-                              ? '⚡ Apply Portable Update & Restart'
-                              : '🚀 Install & Restart (Closes App & Runs Setup)'}
-                          </button>
-
-                          <button
-                            type="button"
-                            className="btn btn-secondary"
-                            style={{ padding: '0.65rem 0.8rem', fontSize: '0.8rem' }}
-                            onClick={cancelInAppDownload}
-                            title="Download different version or package"
-                          >
-                            <RotateCcw size={14} />
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    /* IN-APP PACKAGE SELECTION CARDS */
-                    <div style={{ marginBottom: '1.25rem' }}>
-                      <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--slate-300)', marginBottom: '0.6rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                        {updateInfo?.hasUpdate ? 'Choose Installation Package' : 'Available Downloads & Reinstalls'}
-                      </div>
-
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-                        {/* Windows Setup Card */}
-                        <div style={{ background: 'rgba(30, 41, 59, 0.6)', border: '1px solid rgba(59, 130, 246, 0.3)', borderRadius: 10, padding: '1rem', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-                          <div>
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-                              <span style={{ fontSize: '0.92rem', fontWeight: 700, color: 'white' }}>Windows Setup (.exe)</span>
-                              <span className="badge" style={{ background: 'rgba(59, 130, 246, 0.2)', color: '#93c5fd', border: '1px solid rgba(59, 130, 246, 0.3)', fontSize: '0.65rem' }}>Recommended</span>
-                            </div>
-                            <div style={{ fontSize: '0.75rem', color: 'var(--slate-300)', marginBottom: '0.85rem' }}>
-                              Installs to Program Files with desktop and Start Menu shortcuts.
+                            <div>
+                              <div style={{ fontWeight: 800, fontSize: '1.05rem', color: 'white', display: 'flex', alignItems: 'center', gap: 8 }}>
+                                {modalStepTitle}
+                                <span className="badge" style={{ background: 'rgba(59, 130, 246, 0.2)', color: '#93c5fd', border: '1px solid rgba(59, 130, 246, 0.3)', fontSize: '0.72rem' }}>
+                                  {modalMasterProgress}%
+                                </span>
+                              </div>
+                              <div style={{ fontSize: '0.78rem', color: 'var(--slate-300)', marginTop: 2 }}>
+                                {modalStepDetail}
+                              </div>
                             </div>
                           </div>
 
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                            <button
-                              type="button"
-                              className="btn version-btn-glow"
-                              onClick={() => startInAppDownload('installer')}
-                              style={{ padding: '0.55rem 0.8rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
-                            >
-                              <Download size={14} /> Download In-App
-                            </button>
-                            <a
-                              href={updateInfo?.downloadUrl || `https://github.com/${updateInfo?.repo || 'Doffo-1/Teams-Shifts'}/releases/latest/download/TeamsShifts-Setup.exe`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              style={{ fontSize: '0.68rem', color: 'var(--slate-400)', textAlign: 'center', textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}
-                            >
-                              <ExternalLink size={11} /> Save via browser instead
-                            </a>
-                          </div>
-                        </div>
-
-                        {/* Portable Edition Card */}
-                        <div style={{ background: 'rgba(30, 41, 59, 0.6)', border: '1px solid rgba(71, 85, 105, 0.5)', borderRadius: 10, padding: '1rem', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-                          <div>
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-                              <span style={{ fontSize: '0.92rem', fontWeight: 700, color: 'white' }}>Portable Edition (.zip)</span>
-                              <span className="badge" style={{ background: 'rgba(148, 163, 184, 0.15)', color: '#cbd5e1', border: '1px solid rgba(148, 163, 184, 0.25)', fontSize: '0.65rem' }}>Zero Install</span>
-                            </div>
-                            <div style={{ fontSize: '0.75rem', color: 'var(--slate-300)', marginBottom: '0.85rem' }}>
-                              Standalone zip folder. Extract anywhere and launch TeamsShifts.exe directly.
-                            </div>
-                          </div>
-
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                          {applyState?.status !== 'restarting' && (
                             <button
                               type="button"
                               className="btn btn-secondary"
-                              onClick={() => startInAppDownload('portable')}
-                              style={{ padding: '0.55rem 0.8rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, borderColor: 'rgba(71, 85, 105, 0.6)' }}
+                              onClick={cancelModalUpdate}
+                              style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }}
                             >
-                              <Download size={14} /> Download In-App
+                              Cancel
                             </button>
-                            <a
-                              href={updateInfo?.portableUrl || `https://github.com/${updateInfo?.repo || 'Doffo-1/Teams-Shifts'}/releases/latest/download/TeamsShifts-Standalone.zip`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              style={{ fontSize: '0.68rem', color: 'var(--slate-400)', textAlign: 'center', textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}
-                            >
-                              <ExternalLink size={11} /> Save via browser instead
-                            </a>
+                          )}
+                        </div>
+
+                        {/* Master Progress Track */}
+                        <div className="download-progress-track" style={{ height: 10, marginBottom: '1.25rem' }}>
+                          <div
+                            className="download-progress-bar"
+                            style={{
+                              width: `${Math.max(4, modalMasterProgress)}%`,
+                              background: applyState?.status === 'restarting'
+                                ? 'linear-gradient(90deg, #10b981, #34d399)'
+                                : 'linear-gradient(90deg, #3b82f6, #38bdf8)',
+                            }}
+                          />
+                        </div>
+
+                        {/* 4-Stage Visual Stepper */}
+                        <div className="update-stage-grid">
+                          <div className={`update-stage-card ${modalStep === 1 ? 'active' : modalStep > 1 ? 'completed' : 'pending'}`}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                              <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#93c5fd' }}>STAGE 1</span>
+                              {modalStep > 1 ? (
+                                <Check size={14} color="#34d399" />
+                              ) : modalStep === 1 ? (
+                                <RefreshCw size={12} className="spin-icon" color="#60a5fa" />
+                              ) : (
+                                <Clock size={12} color="#64748b" />
+                              )}
+                            </div>
+                            <div style={{ fontWeight: 700, fontSize: '0.8rem', color: 'white' }}>Download Package</div>
+                            <div style={{ fontSize: '0.7rem', color: 'var(--slate-400)' }}>
+                              {modalDownloadPct > 0 ? `${modalDownloadPct}% • In-App` : 'Release Asset'}
+                            </div>
+                          </div>
+
+                          <div className={`update-stage-card ${modalStep === 2 ? 'active' : modalStep > 2 ? 'completed' : 'pending'}`}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                              <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#93c5fd' }}>STAGE 2</span>
+                              {modalStep > 2 ? (
+                                <Check size={14} color="#34d399" />
+                              ) : modalStep === 2 ? (
+                                <RefreshCw size={12} className="spin-icon" color="#60a5fa" />
+                              ) : (
+                                <Clock size={12} color="#64748b" />
+                              )}
+                            </div>
+                            <div style={{ fontWeight: 700, fontSize: '0.8rem', color: 'white' }}>Unpack & Stage</div>
+                            <div style={{ fontSize: '0.7rem', color: 'var(--slate-400)' }}>
+                              {modalStep >= 2 ? 'Staging payload' : 'Pending'}
+                            </div>
+                          </div>
+
+                          <div className={`update-stage-card ${modalStep === 3 ? 'active' : modalStep > 3 ? 'completed' : 'pending'}`}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                              <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#93c5fd' }}>STAGE 3</span>
+                              {modalStep > 3 ? (
+                                <Check size={14} color="#34d399" />
+                              ) : modalStep === 3 ? (
+                                <RefreshCw size={12} className="spin-icon" color="#60a5fa" />
+                              ) : (
+                                <Clock size={12} color="#64748b" />
+                              )}
+                            </div>
+                            <div style={{ fontWeight: 700, fontSize: '0.8rem', color: 'white' }}>Verify & Secure DB</div>
+                            <div style={{ fontSize: '0.7rem', color: 'var(--slate-400)' }}>
+                              {modalStep >= 3 ? 'shifts.db preserved' : 'Pending'}
+                            </div>
+                          </div>
+
+                          <div className={`update-stage-card ${modalStep === 4 ? 'active completed' : 'pending'}`}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                              <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#93c5fd' }}>STAGE 4</span>
+                              {modalStep === 4 ? (
+                                <Check size={14} color="#34d399" />
+                              ) : (
+                                <Clock size={12} color="#64748b" />
+                              )}
+                            </div>
+                            <div style={{ fontWeight: 700, fontSize: '0.8rem', color: 'white' }}>Silent Relaunch</div>
+                            <div style={{ fontSize: '0.7rem', color: 'var(--slate-400)' }}>
+                              {modalStep === 4 ? 'Restarting in 3s' : 'Zero console window'}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Terminal Live Event Log */}
+                        <div style={{ marginBottom: '0.85rem' }}>
+                          <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--slate-400)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.35rem', display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <Layers size={13} /> Update Progress Event Log
+                          </div>
+                          <div className="update-terminal-box" ref={modalTerminalRef}>
+                            {combinedModalLogs.length === 0 ? (
+                              <div style={{ color: '#64748b', fontStyle: 'italic' }}>Initializing updater sequence...</div>
+                            ) : (
+                              combinedModalLogs.map((log, idx) => (
+                                <div key={idx} className="update-terminal-log">
+                                  <span className="update-terminal-time">[{log.time}]</span>
+                                  <span className={`update-terminal-text ${log.type || 'info'}`}>
+                                    {log.type === 'success' ? '✓ ' : log.type === 'error' ? '✗ ' : '› '}
+                                    {log.text}
+                                  </span>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Zero-Shell Reassurance Banner */}
+                        <div className="update-reassurance-box">
+                          <Shield size={18} color="#38bdf8" style={{ flexShrink: 0 }} />
+                          <div>
+                            <strong>Zero Shell Window:</strong> No command prompt or console window will open. Teams Shifts updates completely silently in the background and will relaunch automatically with your shifts database (<code style={{ color: '#93c5fd' }}>shifts.db</code>) intact.
                           </div>
                         </div>
                       </div>
-                    </div>
-                  )}
+                    ) : (
+                      /* Normal Hero Card & Package Cards */
+                      <>
+                        <div className="version-hero-card">
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div>
+                              <div style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#93c5fd' }}>
+                                SOFTWARE UPDATE STATUS
+                              </div>
+                              <div style={{ fontSize: '1.05rem', fontWeight: 700, color: 'white', marginTop: 3 }}>
+                                {checkingUpdate ? (
+                                  'Querying GitHub Releases...'
+                                ) : updateInfo?.hasUpdate ? (
+                                  `Newer Release Available: ${updateInfo.latestVersion}`
+                                ) : (
+                                  'Teams Shifts is Completely Up to Date'
+                                )}
+                              </div>
+                            </div>
 
-                  {/* Highlights of latest enhancements */}
-                  <div style={{ background: 'rgba(15, 23, 42, 0.6)', border: '1px solid rgba(51, 65, 85, 0.5)', borderRadius: 12, padding: '1rem 1.15rem' }}>
+                            {checkingUpdate ? (
+                              <div className="version-badge-pill" style={{ background: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa', border: '1px solid rgba(59, 130, 246, 0.3)' }}>
+                                <RefreshCw size={12} className="spin-icon" /> Checking...
+                              </div>
+                            ) : updateInfo?.hasUpdate ? (
+                              <div className="version-badge-pill version-badge-update">
+                                <AlertCircle size={13} /> Update Available
+                              </div>
+                            ) : (
+                              <div className="version-badge-pill version-badge-success">
+                                <CheckCircle2 size={13} /> Current Active
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="version-leap-row">
+                            <div style={{ display: 'flex', flexDirection: 'column' }}>
+                              <span style={{ fontSize: '0.72rem', color: 'var(--slate-400)', textTransform: 'uppercase', fontWeight: 600 }}>Installed Edition</span>
+                              <span style={{ fontSize: '1.15rem', fontWeight: 800, color: 'white', fontFamily: 'monospace' }}>
+                                v{updateInfo?.currentVersion || '1.0.13'}
+                              </span>
+                            </div>
+
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: updateInfo?.hasUpdate ? '#fbbf24' : 'var(--slate-500)' }}>
+                              <div style={{ height: 1, width: 32, background: 'currentColor' }} />
+                              <ArrowRight size={18} />
+                              <div style={{ height: 1, width: 32, background: 'currentColor' }} />
+                            </div>
+
+                            <div style={{ display: 'flex', flexDirection: 'column', textAlign: 'right' }}>
+                              <span style={{ fontSize: '0.72rem', color: 'var(--slate-400)', textTransform: 'uppercase', fontWeight: 600 }}>Latest Release</span>
+                              <span style={{ fontSize: '1.15rem', fontWeight: 800, color: updateInfo?.hasUpdate ? '#60a5fa' : '#34d399', fontFamily: 'monospace' }}>
+                                v{updateInfo?.latestVersion || updateInfo?.currentVersion || '1.0.13'}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* 1-Click Update Banner */}
+                          {updateInfo?.hasUpdate && (
+                            <div style={{ marginTop: '1.25rem', paddingTop: '1rem', borderTop: '1px solid rgba(59, 130, 246, 0.25)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                <div style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(16, 185, 129, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#34d399' }}>
+                                  <Sparkles size={18} />
+                                </div>
+                                <div>
+                                  <div style={{ fontWeight: 700, fontSize: '0.9rem', color: 'white' }}>
+                                    1-Click In-App Update Ready
+                                  </div>
+                                  <div style={{ fontSize: '0.75rem', color: 'var(--slate-300)' }}>
+                                    Installs seamlessly inside the app with zero command prompt and automatic restart.
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <button
+                                  type="button"
+                                  className="btn"
+                                  onClick={() => triggerOneClickUpdateModal('portable')}
+                                  style={{
+                                    padding: '0.65rem 1.25rem',
+                                    fontWeight: 700,
+                                    fontSize: '0.85rem',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: 8,
+                                    background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                                    color: 'white',
+                                    borderRadius: 8,
+                                    border: '1px solid #059669',
+                                    boxShadow: '0 4px 15px rgba(16, 185, 129, 0.3)',
+                                  }}
+                                >
+                                  <Play size={16} /> ⚡ 1-Click Update & Restart (Portable)
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Package Selection Cards */}
+                        <div style={{ marginBottom: '1.25rem' }}>
+                          <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--slate-300)', marginBottom: '0.6rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                            {updateInfo?.hasUpdate ? 'Choose Installation Package' : 'Available Downloads & Reinstalls'}
+                          </div>
+
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                            {/* Portable Edition Card */}
+                            <div style={{ background: 'rgba(30, 41, 59, 0.6)', border: '1px solid rgba(59, 130, 246, 0.3)', borderRadius: 10, padding: '1rem', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+                              <div>
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                                  <span style={{ fontSize: '0.92rem', fontWeight: 700, color: 'white' }}>Portable Edition (.zip)</span>
+                                  <span className="badge" style={{ background: 'rgba(16, 185, 129, 0.2)', color: '#6ee7b7', border: '1px solid rgba(16, 185, 129, 0.3)', fontSize: '0.65rem' }}>Direct In-App</span>
+                                </div>
+                                <div style={{ fontSize: '0.75rem', color: 'var(--slate-300)', marginBottom: '0.85rem' }}>
+                                  Self-contained update. Swaps application files cleanly without file locks and preserves your database.
+                                </div>
+                              </div>
+
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                <button
+                                  type="button"
+                                  className="btn version-btn-glow"
+                                  onClick={() => triggerOneClickUpdateModal('portable')}
+                                  style={{ padding: '0.55rem 0.8rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+                                >
+                                  <Play size={14} /> ⚡ Update Portable In-App
+                                </button>
+                                <a
+                                  href={updateInfo?.portableUrl || `https://github.com/${customRepo || updateInfo?.repo || 'Doffo-1/Teams-Shifts'}/releases/latest/download/TeamsShifts-Standalone.zip`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  style={{ fontSize: '0.68rem', color: 'var(--slate-400)', textAlign: 'center', textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}
+                                >
+                                  <ExternalLink size={11} /> Save zip via browser instead
+                                </a>
+                              </div>
+                            </div>
+
+                            {/* Windows Setup Card */}
+                            <div style={{ background: 'rgba(30, 41, 59, 0.6)', border: '1px solid rgba(71, 85, 105, 0.5)', borderRadius: 10, padding: '1rem', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+                              <div>
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                                  <span style={{ fontSize: '0.92rem', fontWeight: 700, color: 'white' }}>Windows Setup (.exe)</span>
+                                  <span className="badge" style={{ background: 'rgba(59, 130, 246, 0.2)', color: '#93c5fd', border: '1px solid rgba(59, 130, 246, 0.3)', fontSize: '0.65rem' }}>Installer</span>
+                                </div>
+                                <div style={{ fontSize: '0.75rem', color: 'var(--slate-300)', marginBottom: '0.85rem' }}>
+                                  Standard Inno Setup installer. Runs silently in the background with zero shell windows.
+                                </div>
+                              </div>
+
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                <button
+                                  type="button"
+                                  className="btn btn-secondary"
+                                  onClick={() => triggerOneClickUpdateModal('installer')}
+                                  style={{ padding: '0.55rem 0.8rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, borderColor: 'rgba(71, 85, 105, 0.6)' }}
+                                >
+                                  <Download size={14} /> 🚀 Update via Setup In-App
+                                </button>
+                                <a
+                                  href={updateInfo?.downloadUrl || `https://github.com/${customRepo || updateInfo?.repo || 'Doffo-1/Teams-Shifts'}/releases/latest/download/TeamsShifts-Setup.exe`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  style={{ fontSize: '0.68rem', color: 'var(--slate-400)', textAlign: 'center', textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}
+                                >
+                                  <ExternalLink size={11} /> Save exe via browser instead
+                                </a>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </>
+                    )}
+
+                    {/* Highlights of latest enhancements */}
+                    <div style={{ background: 'rgba(15, 23, 42, 0.6)', border: '1px solid rgba(51, 65, 85, 0.5)', borderRadius: 12, padding: '1rem 1.15rem' }}>
                     <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--slate-300)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.5rem' }}>
                       Recent Release Highlights
                     </div>
