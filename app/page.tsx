@@ -1961,7 +1961,7 @@ export default function Home() {
       )}
       {/* Version Control & Updates Modal */}
       {versionModalOpen && (
-        <div className="modal-backdrop" onClick={() => setVersionModalOpen(false)}>
+        <div className="modal-backdrop version-modal-overlay" onClick={() => setVersionModalOpen(false)}>
           <div className="modal-card version-modal-card" onClick={e => e.stopPropagation()}>
             <div className="modal-header" style={{ padding: '1.25rem 1.5rem', borderBottom: '1px solid rgba(51, 65, 85, 0.4)' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.9rem' }}>
@@ -1982,7 +1982,20 @@ export default function Home() {
                   </div>
                 </div>
               </div>
-              <button className="modal-close-btn" onClick={() => setVersionModalOpen(false)}>✕</button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <button
+                  className="btn btn-sm btn-secondary"
+                  onClick={() => {
+                    window.open('/version', 'TeamsShiftsVersion', 'width=840,height=760,menubar=no,toolbar=no,location=no,status=no,resizable=yes');
+                    setVersionModalOpen(false);
+                  }}
+                  title="Pop out into separate window"
+                  style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.78rem', padding: '0.35rem 0.7rem' }}
+                >
+                  <ExternalLink size={13} /> Pop out screen
+                </button>
+                <button className="modal-close-btn" onClick={() => setVersionModalOpen(false)}>✕</button>
+              </div>
             </div>
 
             <div className="modal-body" style={{ padding: '1.5rem' }}>

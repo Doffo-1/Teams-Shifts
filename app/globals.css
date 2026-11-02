@@ -1181,12 +1181,43 @@ input[type="range"] {
 
 
 /* Enhanced Version Control & Software Updates Screen */
+.modal-backdrop,
+.version-modal-overlay {
+  position: fixed !important;
+  inset: 0 !important;
+  background: rgba(10, 15, 29, 0.82) !important;
+  backdrop-filter: blur(12px) !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  z-index: 999999 !important;
+  padding: 1.5rem !important;
+  animation: fadeIn 0.2s ease-out;
+}
+
 .version-modal-card {
-  max-width: 680px !important;
-  border: 1px solid rgba(59, 130, 246, 0.25) !important;
-  box-shadow: 0 25px 60px -15px rgba(0, 0, 0, 0.7), 0 0 30px rgba(59, 130, 246, 0.15) !important;
+  max-width: 740px !important;
+  width: 100% !important;
+  max-height: 90vh !important;
+  background: var(--slate-900) !important;
+  border: 1px solid rgba(59, 130, 246, 0.35) !important;
+  box-shadow: 0 25px 60px -15px rgba(0, 0, 0, 0.85), 0 0 35px rgba(59, 130, 246, 0.25) !important;
   border-radius: 16px !important;
-  overflow: hidden;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+  animation: popOutScale 0.22s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
+@keyframes popOutScale {
+  from {
+    opacity: 0;
+    transform: scale(0.92) translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
 }
 
 .version-hero-card {
