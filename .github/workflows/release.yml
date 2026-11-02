@@ -92,10 +92,26 @@ jobs:
             echo "is_prerelease=false" >> $env:GITHUB_OUTPUT
           }
 
+      - name: Build Windows Installer (Setup.exe)
+        run: |
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) {
+            choco install innosetup --no-progress
+          }
+          $iscc = "iscc"
+          if (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe") {
+            $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          }
+          $tag = "${{ steps.release_info.outputs.tag }}"
+          $cleanVer = $tag.TrimStart('v', 'V')
+          if (-not $cleanVer) { $cleanVer = "1.0.0" }
+          & $iscc "/DAppVersion=$cleanVer" "/DSourceDir=..\dist\TeamsShifts" "installer\setup.iss"
+
       - name: Create or Update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: TeamsShifts-Standalone.zip
+          files: |
+            TeamsShifts-Standalone.zip
+            dist/TeamsShifts-Setup.exe
           tag_name: ${{ steps.release_info.outputs.tag }}
           name: Release ${{ steps.release_info.outputs.tag }}
           draft: false

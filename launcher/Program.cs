@@ -59,10 +59,47 @@ namespace TeamsShiftsLauncher
 
             appDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\', '/');
             dataDir = Path.Combine(appDir, "data");
-            if (!Directory.Exists(dataDir))
+
+            // Test if dataDir in appDir is writable (in Program Files without elevation it might be protected)
+            bool canWriteToAppDir = false;
+            try
             {
-                Directory.CreateDirectory(dataDir);
+                if (!Directory.Exists(dataDir))
+                {
+                    Directory.CreateDirectory(dataDir);
+                }
+                string testFile = Path.Combine(dataDir, ".write_test_" + Guid.NewGuid().ToString("N"));
+                File.WriteAllText(testFile, "ok");
+                File.Delete(testFile);
+                canWriteToAppDir = true;
             }
+            catch { }
+
+            // If installed in Program Files and appDir is not writable, fallback to LocalAppData
+            if (!canWriteToAppDir)
+            {
+                try
+                {
+                    string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                    string userDir = Path.Combine(localAppData, "TeamsShifts", "data");
+                    if (!Directory.Exists(userDir))
+                    {
+                        Directory.CreateDirectory(userDir);
+                    }
+
+                    // Copy template database if user database does not exist yet
+                    string templateDb = Path.Combine(dataDir, "shifts.db");
+                    string userDb = Path.Combine(userDir, "shifts.db");
+                    if (File.Exists(templateDb) && !File.Exists(userDb))
+                    {
+                        try { File.Copy(templateDb, userDb, false); } catch { }
+                    }
+
+                    dataDir = userDir;
+                }
+                catch { }
+            }
+
             logFile = Path.Combine(dataDir, "server.log");
 
             // Setup Job Object to auto-terminate child node process when launcher exits

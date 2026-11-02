@@ -123,6 +123,28 @@ if ((Test-Path $csc) -and (Test-Path $programCs)) {
     } catch {
         Write-Host "      Skipping local C# compilation: $_" -ForegroundColor Gray
     }
+
+    # Compile Inno Setup Windows Installer (Setup.exe) if ISCC.exe is available
+    $isccCandidates = @(
+        "C:\Users\daveh\AppData\Local\Programs\Inno Setup 6\ISCC.exe",
+        "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",
+        "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+        "C:\Program Files\Inno Setup 6\ISCC.exe"
+    )
+    $isccExe = $null
+    foreach ($cand in $isccCandidates) {
+        if (Test-Path $cand) { $isccExe = $cand; break }
+    }
+    $issFile = Join-Path $scriptDir "installer\setup.iss"
+    if ($isccExe -and (Test-Path $issFile)) {
+        Write-Host "      Building TeamsShifts-Setup.exe installer..." -ForegroundColor Yellow
+        try {
+            & $isccExe "/DAppVersion=$cleanVer" $issFile | Out-Null
+            Write-Host "      Built TeamsShifts-Setup.exe installer successfully." -ForegroundColor Green
+        } catch {
+            Write-Host "      Skipping local installer build: $_" -ForegroundColor Gray
+        }
+    }
 } else {
     Write-Host ""
     Write-Host "[3/6] Skipping local compilation (GitHub Actions handles release build)." -ForegroundColor Gray
@@ -166,8 +188,9 @@ Write-Host " GitHub Actions is now automatically:" -ForegroundColor White
 Write-Host "   1. Compiling Next.js Standalone build" -ForegroundColor Gray
 Write-Host "   2. Compiling TeamsShifts.exe launcher" -ForegroundColor Gray
 Write-Host "   3. Generating blank SQLite shifts.db" -ForegroundColor Gray
-Write-Host "   4. Packaging TeamsShifts-Standalone.zip" -ForegroundColor Gray
-Write-Host "   5. Publishing Release $tagVer" -ForegroundColor Gray
+Write-Host "   4. Packaging TeamsShifts-Standalone.zip (Portable)" -ForegroundColor Gray
+Write-Host "   5. Building TeamsShifts-Setup.exe (Windows Installer)" -ForegroundColor Gray
+Write-Host "   6. Publishing Release $tagVer" -ForegroundColor Gray
 Write-Host ""
 Write-Host " View build progress at: " -NoNewline
 Write-Host "https://github.com/Doffo-1/Teams-Shifts/actions" -ForegroundColor Cyan

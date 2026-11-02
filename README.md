@@ -12,16 +12,19 @@ An intelligent, multi-team shift scheduler and Microsoft Teams Shifts export/imp
 
 ## 🚀 Quick Start
 
-### Option 1: Portable ZIP Archive (Recommended)
+### Option 1: Windows Installer (Setup.exe - Recommended)
+1. Download **`TeamsShifts-Setup.exe`** from [GitHub Releases](https://github.com/Doffo-1/Teams-Shifts/releases) or the `dist/` directory.
+2. Run the setup wizard to install into **`C:\Program Files\Teams Shifts`**.
+3. Launch from your Start Menu or Desktop shortcut.
+
+### Option 2: Portable ZIP Archive
 1. Download `TeamsShifts-Standalone.zip` from [GitHub Releases](https://github.com/Doffo-1/Teams-Shifts/releases).
 2. Extract anywhere (Desktop, Documents, or local SSD).
 3. Double-click **`TeamsShifts.exe`**.
 
-### Option 2: Run directly from `standalone-app` folder
+### Option 3: Run directly from `standalone-app` folder
 1. Open the [`standalone-app`](standalone-app) folder.
 2. Double-click **`TeamsShifts.exe`**.
-
-> **Note**: No administrator privileges or external installations are required. The application runs strictly in standard user space (`asInvoker`).
 
 ---
 

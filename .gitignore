@@ -53,4 +53,5 @@ temp_excel/
 
 # Standalone desktop builds and archives
 standalone-app/
+dist/
 *.zip
