@@ -133,7 +133,13 @@ jobs:
           }
           Write-Host "Using Inno Setup compiler: $iscc" -ForegroundColor Green
           $cleanVer = "${{ steps.release_info.outputs.clean_version }}"
-          & $iscc "/DAppVersion=$cleanVer" "/DSourceDir=..\dist\TeamsShifts" "installer\setup.iss"
+          $absSource = (Resolve-Path "dist\TeamsShifts").Path
+          $absIss = (Resolve-Path "installer\setup.iss").Path
+          Write-Host "Compiling installer from $absIss with source $absSource..."
+          & $iscc "/DAppVersion=$cleanVer" "/DSourceDir=$absSource" $absIss
+          if ($LASTEXITCODE -ne 0) {
+            throw "ISCC compilation failed with exit code $LASTEXITCODE"
+          }
 
       - name: Generate Checksums
         run: |
