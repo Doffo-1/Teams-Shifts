@@ -258,8 +258,8 @@ export default function Home() {
     }
     // Also include any groups that employees currently have if not yet listed
     for (const emp of employees) {
-      const gId = emp.group || 'DEFAULT';
-      if (!list.some(g => g.id === gId)) {
+      const gId = (emp.group || '').trim();
+      if (gId && !list.some(g => g.id.toLowerCase() === gId.toLowerCase())) {
         list.push({
           id: gId,
           name: gId === 'DEFAULT' ? 'Team Members' : gId,

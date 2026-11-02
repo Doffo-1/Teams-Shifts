@@ -243,6 +243,43 @@ export async function POST(req: Request) {
       }
     });
 
+    // Automatically synchronize team groups from imported records
+    try {
+      const importedGroupNames = new Set<string>();
+      for (const r of rowsToProcess) {
+        if (r.group && r.group.trim()) {
+          importedGroupNames.add(r.group.trim());
+        }
+      }
+      if (importedGroupNames.size > 0) {
+        const teamObj = await prisma.team.findUnique({
+          where: { id: targetTeamId },
+          include: { employees: { select: { group: true } } },
+        });
+        let existingGroups: { id: string; name: string }[] = [];
+        if (teamObj?.groups) {
+          try {
+            const parsed = JSON.parse(teamObj.groups);
+            if (Array.isArray(parsed)) existingGroups = parsed;
+          } catch {}
+        }
+        for (const ig of importedGroupNames) {
+          if (!existingGroups.some(g => g.id.toLowerCase() === ig.toLowerCase() || g.name.toLowerCase() === ig.toLowerCase())) {
+            existingGroups.push({ id: ig, name: ig });
+          }
+        }
+        // If DEFAULT group has zero employees, do not keep it around
+        const hasDefaultEmployees = teamObj?.employees.some(e => !e.group || e.group === 'DEFAULT');
+        if (!hasDefaultEmployees && existingGroups.some(g => g.id === 'DEFAULT')) {
+          existingGroups = existingGroups.filter(g => g.id !== 'DEFAULT');
+        }
+        const jsonStr = JSON.stringify(existingGroups);
+        await prisma.$executeRawUnsafe(`UPDATE "Team" SET "groups" = ? WHERE id = ?`, jsonStr, targetTeamId);
+      }
+    } catch (err) {
+      console.error('Failed to sync team groups after import:', err);
+    }
+
     return NextResponse.json({ success: true, count: rowsToProcess.length });
   } catch (error: any) {
     console.error('Import error:', error);

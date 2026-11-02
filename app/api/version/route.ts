@@ -22,12 +22,40 @@ function isNewerVersion(latest: string, current: string): boolean {
   return lPatch > cPatch;
 }
 
+async function checkViaAtomFeed(repo: string) {
+  try {
+    const res = await fetch(`https://github.com/${repo}/releases.atom`, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      },
+      cache: 'no-store',
+    });
+    if (res.ok) {
+      const xml = await res.text();
+      const tagMatch = xml.match(/<id>tag:github.com,2008:Repository\/\d+\/(v?[0-9.]+)<\/id>/);
+      const titleMatch = xml.match(/<entry>[\s\S]*?<title>([^<]+)<\/title>[\s\S]*?<updated>([^<]+)<\/updated>/);
+      if (tagMatch) {
+        const rawTag = tagMatch[1];
+        const cleanTag = rawTag.replace(/^v/i, '').trim();
+        return {
+          latestVersion: cleanTag,
+          releaseName: titleMatch ? titleMatch[1] : `Release ${rawTag}`,
+          releaseUrl: `https://github.com/${repo}/releases/tag/${rawTag}`,
+          downloadUrl: `https://github.com/${repo}/releases/download/${rawTag}/TeamsShifts-Setup.exe`,
+          portableUrl: `https://github.com/${repo}/releases/download/${rawTag}/TeamsShifts-Standalone.zip`,
+        };
+      }
+    }
+  } catch {}
+  return null;
+}
+
 async function checkViaWebRedirect(repo: string) {
   try {
     const webRes = await fetch(`https://github.com/${repo}/releases/latest`, {
       redirect: 'manual',
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'text/html',
       },
       cache: 'no-store',
@@ -75,11 +103,11 @@ export async function GET(request: Request) {
 
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 4000);
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
 
     const headers: Record<string, string> = {
       'Accept': 'application/vnd.github.v3+json',
-      'User-Agent': 'TeamsShifts-DesktopApp',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) TeamsShifts',
     };
 
     if (process.env.GITHUB_TOKEN) {
@@ -89,7 +117,7 @@ export async function GET(request: Request) {
     const res = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
       headers,
       signal: controller.signal,
-      next: { revalidate: 300 }, // Cache check for 5 minutes
+      next: { revalidate: 300 },
     });
 
     clearTimeout(timeoutId);
@@ -106,7 +134,6 @@ export async function GET(request: Request) {
       responseData.releaseUrl = release.html_url || `https://github.com/${repo}/releases`;
       responseData.publishedAt = release.published_at || '';
 
-      // Locate standalone zip or exe asset
       if (Array.isArray(release.assets)) {
         const exeAsset = release.assets.find((a: any) =>
           typeof a.name === 'string' && a.name.endsWith('.exe')
@@ -126,41 +153,64 @@ export async function GET(request: Request) {
         responseData.downloadUrl = responseData.releaseUrl;
       }
     } else {
-      // If GitHub REST API is rate limited (403) or returns an error, use zero-rate-limit web redirect fallback
-      const fallback = await checkViaWebRedirect(repo);
-      if (fallback) {
-        responseData.latestVersion = fallback.latestVersion;
+      // Fallback 1: Public Atom feed (Zero rate limits)
+      const atomFallback = await checkViaAtomFeed(repo);
+      if (atomFallback) {
+        responseData.latestVersion = atomFallback.latestVersion;
         responseData.hasUpdate = isNewerVersion(responseData.latestVersion, APP_VERSION);
-        responseData.releaseName = fallback.releaseName;
-        responseData.releaseUrl = fallback.releaseUrl;
-        responseData.downloadUrl = fallback.downloadUrl;
-        responseData.portableUrl = fallback.portableUrl;
+        responseData.releaseName = atomFallback.releaseName;
+        responseData.releaseUrl = atomFallback.releaseUrl;
+        responseData.downloadUrl = atomFallback.downloadUrl;
+        responseData.portableUrl = atomFallback.portableUrl;
         responseData.error = null;
-      } else if (res.status === 404) {
-        responseData.error = 'No releases published yet on this repository.';
-      } else if (res.status === 403) {
-        responseData.error = 'GitHub API rate limit temporarily reached. Use "View on GitHub" to download.';
       } else {
-        responseData.error = `GitHub returned status ${res.status}`;
+        // Fallback 2: Web location redirect
+        const webFallback = await checkViaWebRedirect(repo);
+        if (webFallback) {
+          responseData.latestVersion = webFallback.latestVersion;
+          responseData.hasUpdate = isNewerVersion(responseData.latestVersion, APP_VERSION);
+          responseData.releaseName = webFallback.releaseName;
+          responseData.releaseUrl = webFallback.releaseUrl;
+          responseData.downloadUrl = webFallback.downloadUrl;
+          responseData.portableUrl = webFallback.portableUrl;
+          responseData.error = null;
+        } else if (res.status === 404) {
+          responseData.error = 'No releases published yet on this repository.';
+        } else {
+          responseData.error = `GitHub status ${res.status}`;
+        }
       }
     }
   } catch (err: any) {
-    // Attempt web redirect fallback on network or abort errors
-    const fallback = await checkViaWebRedirect(repo);
-    if (fallback) {
-      responseData.latestVersion = fallback.latestVersion;
-      responseData.hasUpdate = isNewerVersion(responseData.latestVersion, APP_VERSION);
-      responseData.releaseName = fallback.releaseName;
-      responseData.releaseUrl = fallback.releaseUrl;
-      responseData.downloadUrl = fallback.downloadUrl;
-      responseData.error = null;
-    } else if (err.name === 'AbortError') {
-      responseData.error = 'Update check timed out. Please check your internet connection.';
-    } else {
-      responseData.error = err.message || 'Unable to contact GitHub.';
+    // If API fetch throws/aborts, try fallback!
+    try {
+      const atomFallback = await checkViaAtomFeed(repo);
+      if (atomFallback) {
+        responseData.latestVersion = atomFallback.latestVersion;
+        responseData.hasUpdate = isNewerVersion(responseData.latestVersion, APP_VERSION);
+        responseData.releaseName = atomFallback.releaseName;
+        responseData.releaseUrl = atomFallback.releaseUrl;
+        responseData.downloadUrl = atomFallback.downloadUrl;
+        responseData.portableUrl = atomFallback.portableUrl;
+        responseData.error = null;
+      } else {
+        const webFallback = await checkViaWebRedirect(repo);
+        if (webFallback) {
+          responseData.latestVersion = webFallback.latestVersion;
+          responseData.hasUpdate = isNewerVersion(responseData.latestVersion, APP_VERSION);
+          responseData.releaseName = webFallback.releaseName;
+          responseData.releaseUrl = webFallback.releaseUrl;
+          responseData.downloadUrl = webFallback.downloadUrl;
+          responseData.portableUrl = webFallback.portableUrl;
+          responseData.error = null;
+        } else {
+          responseData.error = err?.message || 'Failed to check GitHub releases.';
+        }
+      }
+    } catch {
+      responseData.error = err?.message || 'Failed to check GitHub releases.';
     }
   }
 
   return NextResponse.json(responseData);
 }
-

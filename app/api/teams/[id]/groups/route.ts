@@ -26,16 +26,68 @@ function parseGroups(groupsJson?: string | null): GroupItem[] {
 
 async function getTeamGroups(teamId: string): Promise<GroupItem[]> {
   try {
-    const rows = (await prisma.$queryRawUnsafe(`SELECT "groups" FROM "Team" WHERE id = ?`, teamId)) as any[];
-    if (rows && rows.length > 0) {
-      return parseGroups(rows[0].groups);
+    const team = await prisma.team.findUnique({
+      where: { id: teamId },
+      include: { employees: { select: { group: true } } },
+    });
+    if (!team) {
+      return [{ id: 'DEFAULT', name: 'Team Members' }];
     }
+
+    let list: GroupItem[] = [];
+    if (team.groups) {
+      try {
+        const parsed = JSON.parse(team.groups);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          list = parsed;
+        }
+      } catch {}
+    }
+
+    // Collect distinct groups assigned to employees
+    const empGroups = new Set<string>();
+    let hasDefaultEmp = false;
+    for (const emp of team.employees) {
+      const g = (emp.group || '').trim();
+      if (g && g !== 'DEFAULT') {
+        empGroups.add(g);
+      } else {
+        hasDefaultEmp = true;
+      }
+    }
+
+    if (list.length === 0) {
+      if (empGroups.size > 0) {
+        list = Array.from(empGroups).map(g => ({ id: g, name: g }));
+        if (hasDefaultEmp) {
+          list.unshift({ id: 'DEFAULT', name: 'Team Members' });
+        }
+      } else {
+        list = [{ id: 'DEFAULT', name: 'Team Members' }];
+      }
+      await prisma.$executeRawUnsafe(`UPDATE "Team" SET "groups" = ? WHERE id = ?`, JSON.stringify(list), teamId);
+    } else {
+      let modified = false;
+      for (const eg of empGroups) {
+        if (!list.some(g => g.id.toLowerCase() === eg.toLowerCase())) {
+          list.push({ id: eg, name: eg });
+          modified = true;
+        }
+      }
+      if (hasDefaultEmp && !list.some(g => g.id === 'DEFAULT')) {
+        list.unshift({ id: 'DEFAULT', name: 'Team Members' });
+        modified = true;
+      }
+      if (modified) {
+        await prisma.$executeRawUnsafe(`UPDATE "Team" SET "groups" = ? WHERE id = ?`, JSON.stringify(list), teamId);
+      }
+    }
+
+    return list;
   } catch (err) {
     console.error('Error reading groups from database:', err);
+    return [{ id: 'DEFAULT', name: 'Team Members' }];
   }
-  return [
-    { id: 'DEFAULT', name: 'Team Members' },
-  ];
 }
 
 async function setTeamGroups(teamId: string, groups: GroupItem[]): Promise<void> {
