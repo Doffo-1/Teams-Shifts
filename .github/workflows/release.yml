@@ -85,12 +85,18 @@ jobs:
           Copy-Item "launcher/run-console.bat" "dist/TeamsShifts/run-console.bat"
           Copy-Item "launcher/stop.bat" "dist/TeamsShifts/stop.bat"
           Copy-Item "launcher/loading.html" "dist/TeamsShifts/loading.html"
-          Copy-Item "launcher/README.txt" "dist/TeamsShifts/README.txt"
+          if (Test-Path "launcher/README.txt") {
+            Copy-Item "launcher/README.txt" "dist/TeamsShifts/README.txt"
+          } else {
+            Copy-Item "README.md" "dist/TeamsShifts/README.txt"
+          }
 
           # Copy compiled Next.js standalone server
           Copy-Item -Recurse ".next/standalone/*" "dist/TeamsShifts/app/"
           Copy-Item -Recurse ".next/static" "dist/TeamsShifts/app/.next/static"
-          Copy-Item -Recurse "public" "dist/TeamsShifts/app/public"
+          if (Test-Path "public") {
+            Copy-Item -Recurse "public" "dist/TeamsShifts/app/public"
+          }
 
           # Copy Node.js portable runtime
           $nodePath = (Get-Command node).Source
