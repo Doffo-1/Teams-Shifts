@@ -894,7 +894,7 @@ export default function Home() {
     showToast('Shift cleared');
   };
 
-  // Auto-Fill Generator
+  // Auto-Fill Generator (applies recurring fixed days + generates shifts with team rules)
   const generateShifts = async () => {
     const teamId = selectedTeamId || currentTeam?.id;
     if (!teamId) return;
@@ -911,7 +911,13 @@ export default function Home() {
       if (res.ok) {
         const data = await res.json();
         await loadData();
-        showToast(`Auto-fill complete: ${data.summary?.totalGenerated || 0} shifts generated with team rules!`);
+        const total = data.summary?.totalGenerated || 0;
+        const fixed = data.summary?.fixedAppliedCount || 0;
+        if (fixed > 0) {
+          showToast(`Auto-fill complete: ${fixed} fixed day(s) applied & ${total} total shifts scheduled with team rules!`);
+        } else {
+          showToast(`Auto-fill complete: ${total} shifts scheduled with team rules!`);
+        }
       } else {
         const errData = await res.json();
         showToast(errData.error || 'Auto-fill failed', 'error');
@@ -1551,15 +1557,6 @@ export default function Home() {
           </button>
 
           <button
-            onClick={handleApplyFixedDays}
-            disabled={loading || applyingFixed || employees.length === 0}
-            className="btn btn-secondary"
-            title="Apply recurring fixed days (Off, Office, Home, Custom) to this week"
-          >
-            <CalendarCheck size={16} style={{ color: '#38bdf8' }} /> {applyingFixed ? 'Applying...' : 'Apply Fixed Days'}
-          </button>
-
-          <button
             onClick={() => setCopyModalOpen(true)}
             disabled={loading || employees.length === 0}
             className="btn btn-secondary"
@@ -1589,7 +1586,7 @@ export default function Home() {
             onClick={generateShifts}
             disabled={loading || employees.length === 0}
             className="btn btn-primary"
-            title="Auto-fill schedule applying team constraints and member preferences"
+            title="Auto-fill schedule: applies recurring fixed days and generates shifts using team rules"
           >
             <Wand2 size={16} /> Auto-Fill
           </button>

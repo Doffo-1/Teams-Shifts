@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prisma, ensureDefaultData } from '@/lib/db';
 import { generateWeeklySchedule, ShiftInput } from '@/lib/generator';
-import { startOfWeek, addDays } from 'date-fns';
+import { startOfWeek, addDays, isSameDay } from 'date-fns';
 
 export async function POST(req: Request) {
   try {
@@ -69,7 +69,7 @@ export async function POST(req: Request) {
       color: s.color,
     }));
 
-    // Generate schedule using team's configured rules
+    // Generate schedule using team's configured rules, applying fixed days upfront
     const result = generateWeeklySchedule(
       employees.map((e: any) => ({
         id: e.id,
@@ -79,6 +79,8 @@ export async function POST(req: Request) {
         isActive: e.isActive,
         allowedLocation: e.allowedLocation,
         fixedOffDays: e.fixedOffDays,
+        fixedDaySchedule: e.fixedDaySchedule,
+        breakMinutes: e.breakMinutes,
         maxOfficeDays: e.maxOfficeDays,
         maxLateShifts: e.maxLateShifts,
         autoSchedule: e.autoSchedule,
@@ -99,7 +101,7 @@ export async function POST(req: Request) {
       } : undefined
     );
 
-    // Save in transaction: delete non-manual shifts and insert generated ones
+    // Save in transaction: delete previous non-manual shifts and upsert generated & fixed ones
     await prisma.$transaction(async (tx: any) => {
       await tx.shift.deleteMany({
         where: {
@@ -110,15 +112,37 @@ export async function POST(req: Request) {
       });
 
       for (const shift of result.shifts) {
-        if (!shift.isManual) {
-          await tx.shift.create({
-            data: {
-              employeeId: shift.employeeId,
-              date: shift.date,
+        const isExistingManual = existingShifts.some(
+          es => es.employeeId === shift.employeeId && isSameDay(new Date(es.date), new Date(shift.date))
+        );
+
+        if (!isExistingManual) {
+          await tx.shift.upsert({
+            where: {
+              employeeId_date: {
+                employeeId: shift.employeeId,
+                date: new Date(shift.date),
+              },
+            },
+            update: {
               type: shift.type,
               location: shift.location,
-              isManual: false,
+              isManual: Boolean(shift.isManual),
+              customStart: shift.customStart || null,
+              customEnd: shift.customEnd || null,
               notes: shift.notes || null,
+              color: shift.color || null,
+            },
+            create: {
+              employeeId: shift.employeeId,
+              date: new Date(shift.date),
+              type: shift.type,
+              location: shift.location,
+              isManual: Boolean(shift.isManual),
+              customStart: shift.customStart || null,
+              customEnd: shift.customEnd || null,
+              notes: shift.notes || null,
+              color: shift.color || null,
             },
           });
         }

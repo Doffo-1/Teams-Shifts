@@ -299,3 +299,4 @@ export async function DELETE() {
   };
   return NextResponse.json({ status: 'idle', message: 'Download cancelled' });
 }
+

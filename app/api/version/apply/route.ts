@@ -125,3 +125,4 @@ exit
     return NextResponse.json({ error: err?.message || 'Failed to apply update' }, { status: 500 });
   }
 }
+

@@ -46,6 +46,7 @@ export interface GeneratorRules {
 
 export interface GenerationSummary {
   totalGenerated: number;
+  fixedAppliedCount: number;
   shiftsByDay: Record<string, { office: number; home: number; early: number; late: number; off: number }>;
   employeeStats: Record<string, { officeDays: number; earlyCount: number; lateCount: number; offDays: number }>;
 }
@@ -94,54 +95,23 @@ export function generateWeeklySchedule(
     // fallback
   }
 
-  // Filter schedulable employees (active and autoSchedule !== false)
-  const schedulableEmployees = employees.filter(e => e.isActive !== false && e.autoSchedule !== false);
+  // Active employees
+  const allActiveEmployees = employees.filter(e => e.isActive !== false);
+  const schedulableEmployees = allActiveEmployees.filter(e => e.autoSchedule !== false);
 
+  // 1. Start with all existing shifts (manual shifts already created on calendar)
   const generatedShifts: ShiftInput[] = [...existingShifts];
+  let fixedAppliedCount = 0;
 
-  // Track state per employee
-  const empState = new Map<string, {
-    officeDays: number;
-    earlyCount: number;
-    lateCount: number;
-    offDays: number;
-  }>();
-
-  for (const emp of employees) {
-    const empShiftsThisWeek = generatedShifts.filter(
-      (s) => s.employeeId === emp.id && s.date >= start && s.date < addDays(start, 7)
-    );
-    const officeDays = empShiftsThisWeek.filter(
-      (s) => s.location !== 'HOME' && s.type !== 'OFF' && s.type !== 'SICK' && s.type !== 'VACATION'
-    ).length;
-    const earlyCount = empShiftsThisWeek.filter((s) => s.type === 'EARLY').length;
-    const lateCount = empShiftsThisWeek.filter((s) => s.type === 'LATE').length;
-    const offDays = empShiftsThisWeek.filter((s) => s.type === 'OFF').length;
-    empState.set(emp.id, { officeDays, earlyCount, lateCount, offDays });
-  }
-
-  // Order days to process: priority day first, followed by others
-  const orderedDayIndices: number[] = [];
-  const priorityDay = config.priorityDayOfWeek; // e.g. 4 for Thursday
-
-  if (priorityDay > 0 && workingDaysArray.includes(priorityDay)) {
-    orderedDayIndices.push(priorityDay - 1); // 0-indexed offset from Monday
-  }
-  for (const dayNum of workingDaysArray) {
-    const idx = dayNum - 1;
-    if (!orderedDayIndices.includes(idx)) {
-      orderedDayIndices.push(idx);
-    }
-  }
-
-  let newlyCreatedCount = 0;
-
-  for (const dayOffset of orderedDayIndices) {
+  // 2. APPLY ALL FIXED DAYS UPFRONT FOR THE FULL WEEK
+  // This guarantees that before ANY slot is auto-filled, each member's recurring fixed days
+  // are already locked in and accurately counted towards weekly constraints (maxOfficeDays, maxLateShifts, off days)
+  for (const dayOffset of workingDaysArray.map(d => d - 1)) {
     const currentDate = addDays(start, dayOffset);
-    const dayIsoNum = dayOffset + 1; // 1=Mon, 2=Tue, ..., 7=Sun
+    const dayIsoNum = dayOffset + 1; // 1=Mon, ..., 5=Fri
 
-    // 1. Check fixed days schedule (or fixed off days) for each employee
-    for (const emp of schedulableEmployees) {
+    for (const emp of allActiveEmployees) {
+      // Check if employee ALREADY has a manual shift on this day
       const alreadyHasShift = generatedShifts.some(
         s => s.employeeId === emp.id && isSameDay(new Date(s.date), currentDate)
       );
@@ -159,18 +129,16 @@ export function generateWeeklySchedule(
       const dayConfig = fixedSchedule[dayIsoNum.toString()] || fixedSchedule[dayIsoNum];
 
       if (dayConfig && dayConfig.type && dayConfig.type !== 'AUTO') {
-        const state = empState.get(emp.id)!;
         if (dayConfig.type === 'OFF') {
           generatedShifts.push({
             employeeId: emp.id,
             date: currentDate,
             type: 'OFF',
             location: 'HOME',
-            isManual: false,
+            isManual: true,
             notes: dayConfig.notes || 'Fixed day off',
           });
-          newlyCreatedCount++;
-          state.offDays++;
+          fixedAppliedCount++;
         } else if (dayConfig.type === 'OFFICE') {
           const shiftType = dayConfig.shiftType && dayConfig.shiftType !== 'AUTO' ? dayConfig.shiftType : 'EARLY';
           generatedShifts.push({
@@ -178,13 +146,10 @@ export function generateWeeklySchedule(
             date: currentDate,
             type: shiftType,
             location: 'OFFICE',
-            isManual: false,
+            isManual: true,
             notes: dayConfig.notes || 'Fixed office',
           });
-          newlyCreatedCount++;
-          state.officeDays++;
-          if (shiftType === 'LATE') state.lateCount++;
-          else if (shiftType === 'EARLY') state.earlyCount++;
+          fixedAppliedCount++;
         } else if (dayConfig.type === 'HOME') {
           const shiftType = dayConfig.shiftType && dayConfig.shiftType !== 'AUTO' ? dayConfig.shiftType : 'EARLY';
           generatedShifts.push({
@@ -192,12 +157,10 @@ export function generateWeeklySchedule(
             date: currentDate,
             type: shiftType,
             location: 'HOME',
-            isManual: false,
+            isManual: true,
             notes: dayConfig.notes || 'Fixed home',
           });
-          newlyCreatedCount++;
-          if (shiftType === 'LATE') state.lateCount++;
-          else if (shiftType === 'EARLY') state.earlyCount++;
+          fixedAppliedCount++;
         } else if (dayConfig.type === 'CUSTOM') {
           const loc = dayConfig.location || 'OFFICE';
           generatedShifts.push({
@@ -207,11 +170,10 @@ export function generateWeeklySchedule(
             location: loc,
             customStart: dayConfig.start || '08:30',
             customEnd: dayConfig.end || '17:00',
-            isManual: false,
+            isManual: true,
             notes: dayConfig.notes || 'Fixed custom',
           });
-          newlyCreatedCount++;
-          if (loc !== 'HOME') state.officeDays++;
+          fixedAppliedCount++;
         }
       } else {
         // Fallback to legacy fixedOffDays
@@ -230,22 +192,68 @@ export function generateWeeklySchedule(
             date: currentDate,
             type: 'OFF',
             location: 'HOME',
-            isManual: false,
+            isManual: true,
             notes: 'Fixed day off',
           });
-          newlyCreatedCount++;
-          const state = empState.get(emp.id)!;
-          state.offDays++;
+          fixedAppliedCount++;
         }
       }
     }
+  }
 
-    // 2. Find employees available today
+  // 3. ACCURATELY INITIALIZE EMPLOYEE STATS ACROSS THE ENTIRE WEEK
+  // Includes all manual shifts AND fixed day shifts!
+  const empState = new Map<string, {
+    officeDays: number;
+    earlyCount: number;
+    lateCount: number;
+    offDays: number;
+  }>();
+
+  for (const emp of allActiveEmployees) {
+    const empShiftsThisWeek = generatedShifts.filter((s) => {
+      if (s.employeeId !== emp.id) return false;
+      const sDate = new Date(s.date);
+      return sDate >= start && sDate < addDays(start, 7);
+    });
+
+    const officeDays = empShiftsThisWeek.filter(
+      (s) => s.location !== 'HOME' && s.type !== 'OFF' && s.type !== 'SICK' && s.type !== 'VACATION'
+    ).length;
+    const earlyCount = empShiftsThisWeek.filter((s) => s.type === 'EARLY').length;
+    const lateCount = empShiftsThisWeek.filter((s) => s.type === 'LATE').length;
+    const offDays = empShiftsThisWeek.filter((s) => s.type === 'OFF').length;
+
+    empState.set(emp.id, { officeDays, earlyCount, lateCount, offDays });
+  }
+
+  // 4. ORDER DAYS TO PROCESS: Priority day first (e.g. Thursday), then remaining days
+  const orderedDayIndices: number[] = [];
+  const priorityDay = config.priorityDayOfWeek;
+
+  if (priorityDay > 0 && workingDaysArray.includes(priorityDay)) {
+    orderedDayIndices.push(priorityDay - 1);
+  }
+  for (const dayNum of workingDaysArray) {
+    const idx = dayNum - 1;
+    if (!orderedDayIndices.includes(idx)) {
+      orderedDayIndices.push(idx);
+    }
+  }
+
+  let autoFilledCount = 0;
+
+  // 5. FILL REMAINING OPEN SLOTS DAY BY DAY WITH ALL CONSTRAINTS IN MIND
+  for (const dayOffset of orderedDayIndices) {
+    const currentDate = addDays(start, dayOffset);
+    const dayIsoNum = dayOffset + 1; // 1=Mon, 2=Tue, ..., 7=Sun
+
+    // Schedulable employees available today (who do NOT have a manual or fixed shift today)
     let availableEmployees = schedulableEmployees.filter(
       emp => !generatedShifts.some(s => s.employeeId === emp.id && isSameDay(new Date(s.date), currentDate))
     );
 
-    // 3. Calculate current daily shift tallies
+    // Calculate daily shift tallies from ALREADY PLACED shifts (manual + fixed)
     const dailyShifts = generatedShifts.filter(
       s => isSameDay(new Date(s.date), currentDate) &&
            s.type !== 'OFF' && s.type !== 'SICK' && s.type !== 'VACATION' && s.type !== 'CUSTOM'
@@ -257,21 +265,19 @@ export function generateWeeklySchedule(
     let earlyHomeCount = coreDailyShifts.filter(s => s.type === 'EARLY' && s.location === 'HOME').length;
     let lateHomeCount = coreDailyShifts.filter(s => s.type === 'LATE' && s.location === 'HOME').length;
 
-    // Daily office target percentage
+    // Daily office target calculation
     const targetPercent = targetsMap[dayIsoNum.toString()] ?? 50;
+    const totalStaff = availableEmployees.length + coreDailyShifts.length;
+    let targetOffice = Math.round((totalStaff * targetPercent) / 100);
+    if (targetPercent >= 100) targetOffice = totalStaff;
+    if (targetPercent <= 0) targetOffice = 0;
 
     while (availableEmployees.length > 0) {
       const totalEarly = earlyOfficeCount + earlyHomeCount;
       const totalLate = lateOfficeCount + lateHomeCount;
       const totalOffice = earlyOfficeCount + lateOfficeCount;
-      const totalStaff = availableEmployees.length + totalEarly + totalLate;
 
-      // Calculate target office count for this day
-      let targetOffice = Math.round((totalStaff * targetPercent) / 100);
-      if (targetPercent >= 100) targetOffice = totalStaff;
-      if (targetPercent <= 0) targetOffice = 0;
-
-      // Check if any available employee can be in office
+      // Check if any available employee can be placed in office without exceeding their weekly office limit
       const someoneCanBeInOffice = availableEmployees.some(emp => {
         if (emp.allowedLocation === 'HOME_ONLY') return false;
         const state = empState.get(emp.id)!;
@@ -282,18 +288,23 @@ export function generateWeeklySchedule(
       let neededType: ShiftType = 'EARLY';
       let neededLocation: LocationType | null = null;
 
-      // Determine required shift type and location
+      // Rule Priority 1: Team minimum Early in office
       if (earlyOfficeCount < config.minOfficeEarlyPerDay && someoneCanBeInOffice) {
         neededType = 'EARLY';
         neededLocation = 'OFFICE';
-      } else if (totalEarly === 0) {
+      }
+      // Rule Priority 2: At least 1 Early shift if none yet
+      else if (totalEarly === 0) {
         neededType = 'EARLY';
         neededLocation = someoneCanBeInOffice && totalOffice < targetOffice ? 'OFFICE' : 'HOME';
-      } else if (totalLate < config.minLatePerDay) {
+      }
+      // Rule Priority 3: Team minimum Late shifts
+      else if (totalLate < config.minLatePerDay) {
         neededType = 'LATE';
-        neededLocation = totalOffice < targetOffice && someoneCanBeInOffice ? 'OFFICE' : 'HOME';
-      } else {
-        // Balance Early vs Late
+        neededLocation = someoneCanBeInOffice && totalOffice < targetOffice ? 'OFFICE' : 'HOME';
+      }
+      // Rule Priority 4: Balance Early vs Late and Office vs Home
+      else {
         if (totalEarly < totalLate) {
           neededType = 'EARLY';
         } else if (totalLate < totalEarly) {
@@ -321,16 +332,18 @@ export function generateWeeklySchedule(
 
         let score = 0;
 
-        // Hard checks
+        // Hard check: Office limit
         if (neededLocation === 'OFFICE') {
           if (emp.allowedLocation === 'HOME_ONLY') continue;
           if (state.officeDays >= maxOffice) continue;
         }
 
+        // Hard check: Home limit
         if (neededLocation === 'HOME') {
           if (emp.allowedLocation === 'OFFICE_ONLY') continue;
         }
 
+        // Hard check: Late shift limit
         if (neededType === 'LATE' && state.lateCount >= maxLate) {
           if (totalLate < config.minLatePerDay) {
             score += 1000; // emergency fallback
@@ -358,7 +371,7 @@ export function generateWeeklySchedule(
         }
       }
 
-      // Fallback 1: Relax location constraint if needed
+      // Fallback 1: Relax location constraint if office was requested but no one can do office
       if (bestEmpIndex === -1 && neededLocation === 'OFFICE') {
         neededLocation = 'HOME';
         for (let j = 0; j < availableEmployees.length; j++) {
@@ -373,7 +386,7 @@ export function generateWeeklySchedule(
         }
       }
 
-      // Fallback 2: Toggle shift type if no one can take the requested type
+      // Fallback 2: Toggle shift type if no candidate for neededType
       if (bestEmpIndex === -1) {
         neededType = neededType === 'EARLY' ? 'LATE' : 'EARLY';
         for (let j = 0; j < availableEmployees.length; j++) {
@@ -419,7 +432,7 @@ export function generateWeeklySchedule(
         location: finalLocation,
         isManual: false,
       });
-      newlyCreatedCount++;
+      autoFilledCount++;
 
       if (finalLocation !== 'HOME') {
         if (neededType === 'EARLY') earlyOfficeCount++;
@@ -459,7 +472,8 @@ export function generateWeeklySchedule(
   return {
     shifts: generatedShifts,
     summary: {
-      totalGenerated: newlyCreatedCount,
+      totalGenerated: autoFilledCount + fixedAppliedCount,
+      fixedAppliedCount,
       shiftsByDay,
       employeeStats,
     },
