@@ -1,6 +1,6 @@
 {
   "name": "teams-shifts",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "Intelligent multi-team Microsoft Teams Shifts Generator with configurable rules engine",
   "private": true,
   "license": "MIT",

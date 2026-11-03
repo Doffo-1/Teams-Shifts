@@ -270,49 +270,39 @@ export async function POST(request: Request) {
             globalForApply.applyState.detail = 'Configuring zero-shell background file replacement and restart script';
           }
 
-          // Build silent VBScript updater (Executed via wscript.exe: NO command prompt, NO shell window)
-          const vbsPath = path.join(tempDir, `teams-shifts-silent-updater-${Date.now()}.vbs`);
-          const vbsSourceDir = sourceDir.replace(/"/g, '""');
-          const vbsAppDir = appDir.replace(/"/g, '""');
-          const vbsStagingDir = stagingDir.replace(/"/g, '""');
-          const vbsFlagFile = flagFile.replace(/"/g, '""');
+          // Build silent PowerShell & CMD fallback update runner (zero console window, works with enterprise policies)
+          const ts = Date.now();
+          const psPath = path.join(tempDir, `teams-shifts-updater-${ts}.ps1`);
+          const cmdPath = path.join(tempDir, `teams-shifts-updater-${ts}.cmd`);
 
-          const vbsContent = `Option Explicit
-Dim sh, fso
-Set sh = CreateObject("WScript.Shell")
-Set fso = CreateObject("Scripting.FileSystemObject")
+          const psContent = [
+            `$ErrorActionPreference = 'SilentlyContinue'`,
+            `Start-Sleep -Milliseconds 2500`,
+            `Get-Process -Name TeamsShifts -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue`,
+            `Get-Process -Name node -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue`,
+            `Start-Sleep -Milliseconds 500`,
+            `& robocopy.exe "${sourceDir}" "${appDir}" /E /XD "${appDir}\\data" /XF "*.db" /NP /NJS /NJH /R:2 /W:1 | Out-Null`,
+            `if (Test-Path "${stagingDir}") { Remove-Item -Path "${stagingDir}" -Recurse -Force -ErrorAction SilentlyContinue }`,
+            `if (Test-Path "${flagFile}") { Remove-Item -Path "${flagFile}" -Force -ErrorAction SilentlyContinue }`,
+            `Start-Process -FilePath "${appDir}\\TeamsShifts.exe"`,
+            `Remove-Item -Path $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue`,
+          ].join('\r\n');
 
-' 1. Wait for parent application and server to release all file locks
-WScript.Sleep 2500
+          const cmdContent = [
+            `@echo off`,
+            `timeout /t 3 >nul`,
+            `taskkill /F /IM TeamsShifts.exe /T >nul 2>&1`,
+            `taskkill /F /IM node.exe /T >nul 2>&1`,
+            `timeout /t 1 >nul`,
+            `robocopy "${sourceDir}" "${appDir}" /E /XD "${appDir}\\data" /XF "*.db" /NP /NJS /NJH /R:2 /W:1 >nul 2>&1`,
+            `if exist "${stagingDir}" rd /s /q "${stagingDir}" >nul 2>&1`,
+            `if exist "${flagFile}" del /f /q "${flagFile}" >nul 2>&1`,
+            `start "" "${appDir}\\TeamsShifts.exe"`,
+            `del /f /q "%~f0" >nul 2>&1`,
+          ].join('\r\n');
 
-' 2. Ensure lingering processes are terminated (SW_HIDE: 0, completely invisible)
-On Error Resume Next
-sh.Run "taskkill.exe /F /IM TeamsShifts.exe /T", 0, True
-sh.Run "taskkill.exe /F /IM node.exe /T", 0, True
-WScript.Sleep 500
-
-' 3. Silently copy updated application files into target directory
-' Exclude data directory and database files to preserve all shifts and settings
-sh.Run "robocopy.exe """ & "${vbsSourceDir}" & """ """ & "${vbsAppDir}" & """ /E /XD """ & "${vbsAppDir}" & "\\data"" /XF ""*.db"" /NP /NJS /NJH", 0, True
-
-' 4. Clean up temporary staging directory silently
-If fso.FolderExists("${vbsStagingDir}") Then
-    sh.Run "cmd.exe /c rd /s /q """ & "${vbsStagingDir}" & """", 0, True
-End If
-
-' 5. Remove updating flag file
-If fso.FileExists("${vbsFlagFile}") Then
-    fso.DeleteFile "${vbsFlagFile}", True
-End If
-
-' 6. Relaunch updated Teams Shifts (SW_SHOWNORMAL: 1)
-sh.Run """" & "${vbsAppDir}" & "\\TeamsShifts.exe""", 1, False
-
-' 7. Clean up this updater script
-fso.DeleteFile WScript.ScriptFullName, True
-`;
-
-          fs.writeFileSync(vbsPath, vbsContent, 'utf8');
+          fs.writeFileSync(psPath, psContent, 'utf8');
+          fs.writeFileSync(cmdPath, cmdContent, 'utf8');
           addLog('Silent background runner armed (zero console window).', 'success');
 
           if (globalForApply.applyState) {
@@ -324,13 +314,29 @@ fso.DeleteFile WScript.ScriptFullName, True
           }
           addLog('Teams Shifts is restarting cleanly. Relaunching in 3 seconds...', 'info');
 
-          // Launch updater using wscript.exe (GUI subsystem: NEVER opens a command prompt)
-          const runner = spawn('wscript.exe', ['//B', '//Nologo', vbsPath], {
-            detached: true,
-            stdio: 'ignore',
-            windowsHide: true,
-          });
-          runner.unref();
+          // Launch updater using PowerShell (with CMD fallback)
+          try {
+            const runner = spawn('powershell.exe', [
+              '-NoProfile',
+              '-NonInteractive',
+              '-WindowStyle', 'Hidden',
+              '-ExecutionPolicy', 'Bypass',
+              '-File', psPath,
+            ], {
+              detached: true,
+              stdio: 'ignore',
+              windowsHide: true,
+            });
+            runner.unref();
+          } catch (psErr: any) {
+            console.warn('[AutoUpdate] PowerShell spawn failed, launching cmd fallback:', psErr);
+            const cmdRunner = spawn('cmd.exe', ['/c', 'start', '/b', '""', cmdPath], {
+              detached: true,
+              stdio: 'ignore',
+              windowsHide: true,
+            });
+            cmdRunner.unref();
+          }
 
           // Exit node process gracefully after 2.5s
           setTimeout(() => {
@@ -358,43 +364,37 @@ fso.DeleteFile WScript.ScriptFullName, True
             globalForApply.applyState.detail = 'Configuring background installer execution and automatic restart';
           }
 
-          // Build silent VBScript installer runner
-          const vbsPath = path.join(tempDir, `teams-shifts-silent-installer-${Date.now()}.vbs`);
-          const vbsSetupExe = targetFilePath.replace(/"/g, '""');
-          const vbsAppDir = appDir.replace(/"/g, '""');
-          const vbsFlagFile = flagFile.replace(/"/g, '""');
+          // Build silent PowerShell & CMD fallback installer runner
+          const ts = Date.now();
+          const psPath = path.join(tempDir, `teams-shifts-installer-${ts}.ps1`);
+          const cmdPath = path.join(tempDir, `teams-shifts-installer-${ts}.cmd`);
 
-          const vbsContent = `Option Explicit
-Dim sh, fso
-Set sh = CreateObject("WScript.Shell")
-Set fso = CreateObject("Scripting.FileSystemObject")
+          const psContent = [
+            `$ErrorActionPreference = 'SilentlyContinue'`,
+            `Start-Sleep -Milliseconds 2500`,
+            `Get-Process -Name TeamsShifts -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue`,
+            `Get-Process -Name node -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue`,
+            `Start-Sleep -Milliseconds 500`,
+            `$proc = Start-Process -FilePath "${targetFilePath}" -ArgumentList "/SILENT /CLOSEAPPLICATIONS" -Wait -PassThru`,
+            `if (Test-Path "${flagFile}") { Remove-Item -Path "${flagFile}" -Force -ErrorAction SilentlyContinue }`,
+            `if (Test-Path "${appDir}\\TeamsShifts.exe") { Start-Process -FilePath "${appDir}\\TeamsShifts.exe" }`,
+            `Remove-Item -Path $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue`,
+          ].join('\r\n');
 
-' 1. Wait for parent application to exit
-WScript.Sleep 2500
+          const cmdContent = [
+            `@echo off`,
+            `timeout /t 3 >nul`,
+            `taskkill /F /IM TeamsShifts.exe /T >nul 2>&1`,
+            `taskkill /F /IM node.exe /T >nul 2>&1`,
+            `timeout /t 1 >nul`,
+            `"${targetFilePath}" /SILENT /CLOSEAPPLICATIONS`,
+            `if exist "${flagFile}" del /f /q "${flagFile}" >nul 2>&1`,
+            `if exist "${appDir}\\TeamsShifts.exe" start "" "${appDir}\\TeamsShifts.exe"`,
+            `del /f /q "%~f0" >nul 2>&1`,
+          ].join('\r\n');
 
-' 2. Ensure lingering processes are terminated (SW_HIDE: 0)
-On Error Resume Next
-sh.Run "taskkill.exe /F /IM TeamsShifts.exe /T", 0, True
-sh.Run "taskkill.exe /F /IM node.exe /T", 0, True
-WScript.Sleep 500
-
-' 3. Launch Inno Setup installer silently with /CLOSEAPPLICATIONS
-' Running the installer directly (GUI exe) shows NO command prompt!
-sh.Run """" & "${vbsSetupExe}" & """ /SILENT /CLOSEAPPLICATIONS", 1, True
-
-' 4. Remove updating flag file
-If fso.FileExists("${vbsFlagFile}") Then
-    fso.DeleteFile "${vbsFlagFile}", True
-End If
-
-' 5. Relaunch updated Teams Shifts
-sh.Run """" & "${vbsAppDir}" & "\\TeamsShifts.exe""", 1, False
-
-' 6. Clean up this installer runner script
-fso.DeleteFile WScript.ScriptFullName, True
-`;
-
-          fs.writeFileSync(vbsPath, vbsContent, 'utf8');
+          fs.writeFileSync(psPath, psContent, 'utf8');
+          fs.writeFileSync(cmdPath, cmdContent, 'utf8');
           addLog('Silent setup runner armed (zero console window).', 'success');
 
           if (globalForApply.applyState) {
@@ -406,13 +406,29 @@ fso.DeleteFile WScript.ScriptFullName, True
           }
           addLog('Teams Shifts is closing down for silent setup. Relaunching in 3 seconds...', 'info');
 
-          // Launch runner via wscript.exe (GUI subsystem: zero command prompt)
-          const runner = spawn('wscript.exe', ['//B', '//Nologo', vbsPath], {
-            detached: true,
-            stdio: 'ignore',
-            windowsHide: true,
-          });
-          runner.unref();
+          // Launch runner via PowerShell (with CMD fallback)
+          try {
+            const runner = spawn('powershell.exe', [
+              '-NoProfile',
+              '-NonInteractive',
+              '-WindowStyle', 'Hidden',
+              '-ExecutionPolicy', 'Bypass',
+              '-File', psPath,
+            ], {
+              detached: true,
+              stdio: 'ignore',
+              windowsHide: true,
+            });
+            runner.unref();
+          } catch (psErr: any) {
+            console.warn('[AutoUpdate] PowerShell spawn failed, launching cmd fallback:', psErr);
+            const cmdRunner = spawn('cmd.exe', ['/c', 'start', '/b', '""', cmdPath], {
+              detached: true,
+              stdio: 'ignore',
+              windowsHide: true,
+            });
+            cmdRunner.unref();
+          }
 
           // Exit node process gracefully after 2.5s
           setTimeout(() => {
