@@ -61,12 +61,12 @@ export async function POST(request: Request) {
     // Fetch team rules for maxOfficeDaysPerWeek default
     let defaultMaxOfficeDays = 3;
     try {
-      const rule = await prisma.rule.findUnique({ where: { teamId } });
+      const rule = await prisma.teamRule.findUnique({ where: { teamId } });
       if (rule && rule.maxOfficeDaysPerWeek) defaultMaxOfficeDays = rule.maxOfficeDaysPerWeek;
     } catch {
       try {
         const rules = (await prisma.$queryRawUnsafe(
-          `SELECT "maxOfficeDaysPerWeek" FROM "Rule" WHERE "teamId" = ? LIMIT 1`,
+          `SELECT "maxOfficeDaysPerWeek" FROM "TeamRule" WHERE "teamId" = ? LIMIT 1`,
           teamId
         )) as any[];
         if (rules.length > 0 && rules[0].maxOfficeDaysPerWeek) {
