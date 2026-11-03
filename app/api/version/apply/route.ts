@@ -284,7 +284,7 @@ export async function POST(request: Request) {
             `& robocopy.exe "${sourceDir}" "${appDir}" /E /XD "${appDir}\\data" /XF "*.db" /NP /NJS /NJH /R:2 /W:1 | Out-Null`,
             `if (Test-Path "${stagingDir}") { Remove-Item -Path "${stagingDir}" -Recurse -Force -ErrorAction SilentlyContinue }`,
             `if (Test-Path "${flagFile}") { Remove-Item -Path "${flagFile}" -Force -ErrorAction SilentlyContinue }`,
-            `Start-Process -FilePath "${appDir}\\TeamsShifts.exe"`,
+            `if (Test-Path "${appDir}\\TeamsShifts.exe") { Start-Process -FilePath "${appDir}\\TeamsShifts.exe" -WindowStyle Normal }`,
             `Remove-Item -Path $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue`,
           ].join('\r\n');
 
@@ -297,7 +297,7 @@ export async function POST(request: Request) {
             `robocopy "${sourceDir}" "${appDir}" /E /XD "${appDir}\\data" /XF "*.db" /NP /NJS /NJH /R:2 /W:1 >nul 2>&1`,
             `if exist "${stagingDir}" rd /s /q "${stagingDir}" >nul 2>&1`,
             `if exist "${flagFile}" del /f /q "${flagFile}" >nul 2>&1`,
-            `start "" "${appDir}\\TeamsShifts.exe"`,
+            `if exist "${appDir}\\TeamsShifts.exe" start "" "${appDir}\\TeamsShifts.exe"`,
             `del /f /q "%~f0" >nul 2>&1`,
           ].join('\r\n');
 
@@ -369,15 +369,23 @@ export async function POST(request: Request) {
           const psPath = path.join(tempDir, `teams-shifts-installer-${ts}.ps1`);
           const cmdPath = path.join(tempDir, `teams-shifts-installer-${ts}.cmd`);
 
+          const innoFlags = '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /CLOSEAPPLICATIONS /FORCECLOSEAPPLICATIONS';
+
           const psContent = [
             `$ErrorActionPreference = 'SilentlyContinue'`,
             `Start-Sleep -Milliseconds 2500`,
             `Get-Process -Name TeamsShifts -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue`,
             `Get-Process -Name node -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue`,
             `Start-Sleep -Milliseconds 500`,
-            `$proc = Start-Process -FilePath "${targetFilePath}" -ArgumentList "/SILENT /CLOSEAPPLICATIONS" -Wait -PassThru`,
+            `$proc = Start-Process -FilePath "${targetFilePath}" -ArgumentList "${innoFlags}" -Wait -PassThru`,
+            `Start-Sleep -Milliseconds 1000`,
             `if (Test-Path "${flagFile}") { Remove-Item -Path "${flagFile}" -Force -ErrorAction SilentlyContinue }`,
-            `if (Test-Path "${appDir}\\TeamsShifts.exe") { Start-Process -FilePath "${appDir}\\TeamsShifts.exe" }`,
+            `$exePath = "${appDir}\\TeamsShifts.exe"`,
+            `if (-not (Test-Path $exePath)) {`,
+            `  $reg = Get-ItemProperty "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*" -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like "*Teams Shifts*" } | Select-Object -First 1`,
+            `  if ($reg -and $reg.InstallLocation) { $exePath = Join-Path $reg.InstallLocation "TeamsShifts.exe" }`,
+            `}`,
+            `if (Test-Path $exePath) { Start-Process -FilePath $exePath -WindowStyle Normal }`,
             `Remove-Item -Path $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue`,
           ].join('\r\n');
 
@@ -387,7 +395,8 @@ export async function POST(request: Request) {
             `taskkill /F /IM TeamsShifts.exe /T >nul 2>&1`,
             `taskkill /F /IM node.exe /T >nul 2>&1`,
             `timeout /t 1 >nul`,
-            `"${targetFilePath}" /SILENT /CLOSEAPPLICATIONS`,
+            `"${targetFilePath}" ${innoFlags}`,
+            `timeout /t 1 >nul`,
             `if exist "${flagFile}" del /f /q "${flagFile}" >nul 2>&1`,
             `if exist "${appDir}\\TeamsShifts.exe" start "" "${appDir}\\TeamsShifts.exe"`,
             `del /f /q "%~f0" >nul 2>&1`,
