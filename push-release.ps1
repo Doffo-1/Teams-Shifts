@@ -103,11 +103,19 @@ if (Test-Path $versionTsPath) {
     $vTs = "export const APP_VERSION = '$cleanVer';`r`nexport const DEFAULT_GITHUB_REPO = 'Doffo-1/Teams-Shifts';`r`n"
     Set-Content -Path $versionTsPath -Value $vTs -NoNewline
 }
-Write-Host "      Updated package.json and lib/version.ts." -ForegroundColor Green
+$assemblyCsPath = Join-Path $scriptDir "launcher\AssemblyInfo.cs"
+if (Test-Path $assemblyCsPath) {
+    $aContent = Get-Content $assemblyCsPath -Raw
+    $aContent = $aContent -replace 'AssemblyVersion\("[^"]+"\)', "AssemblyVersion(`"$cleanVer.0`")"
+    $aContent = $aContent -replace 'AssemblyFileVersion\("[^"]+"\)', "AssemblyFileVersion(`"$cleanVer.0`")"
+    Set-Content -Path $assemblyCsPath -Value $aContent -NoNewline
+}
+Write-Host "      Updated package.json, lib/version.ts, and launcher/AssemblyInfo.cs." -ForegroundColor Green
 
 # 5. Compile C# Launcher executable if csc.exe is available
 $csc = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 $programCs = Join-Path $scriptDir "launcher\Program.cs"
+$assemblyCs = Join-Path $scriptDir "launcher\AssemblyInfo.cs"
 $iconPath = Join-Path $scriptDir "launcher\app.ico"
 $manifestPath = Join-Path $scriptDir "launcher\app.manifest"
 $standaloneExe = Join-Path $scriptDir "standalone-app\TeamsShifts.exe"
@@ -117,7 +125,7 @@ if ((Test-Path $csc) -and (Test-Path $programCs)) {
     Write-Host ""
     Write-Host "[3/6] Compiling TeamsShifts.exe launcher..." -ForegroundColor Yellow
     try {
-        & $csc /target:winexe /optimize+ /platform:anycpu "/win32icon:$iconPath" "/win32manifest:$manifestPath" /r:System.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll "/out:$standaloneExe" $programCs | Out-Null
+        & $csc /target:winexe /optimize+ /platform:anycpu "/win32icon:$iconPath" "/win32manifest:$manifestPath" /r:System.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll "/out:$standaloneExe" $programCs $assemblyCs | Out-Null
         Copy-Item $standaloneExe $launcherExe -Force -ErrorAction SilentlyContinue
         Write-Host "      Compiled TeamsShifts.exe successfully." -ForegroundColor Green
     } catch {

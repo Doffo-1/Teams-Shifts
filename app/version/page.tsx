@@ -34,6 +34,8 @@ interface UpdateInfo {
   repo: string;
   lastChecked: string;
   error: string | null;
+  isInstalled?: boolean;
+  edition?: 'installed' | 'portable';
 }
 
 interface DownloadProgress {
@@ -79,7 +81,7 @@ export default function VersionPage() {
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
   const [applyState, setApplyState] = useState<ApplyState | null>(null);
   const [isUpdating, setIsUpdating] = useState(false);
-  const [selectedAssetType, setSelectedAssetType] = useState<'portable' | 'installer'>('portable');
+  const [selectedAssetType, setSelectedAssetType] = useState<'installer'>('installer');
   const [localLogs, setLocalLogs] = useState<ApplyLog[]>([]);
 
   const terminalRef = useRef<HTMLDivElement>(null);
@@ -137,18 +139,18 @@ export default function VersionPage() {
     return null;
   };
 
-  const startInAppDownload = async (assetType: 'installer' | 'portable') => {
-    setSelectedAssetType(assetType);
+  const startInAppDownload = async (assetType: 'installer' = 'installer') => {
+    setSelectedAssetType('installer');
     setIsUpdating(true);
-    addLocalLog(`Starting download of ${assetType === 'portable' ? 'TeamsShifts-Standalone.zip' : 'TeamsShifts-Setup.exe'}...`, 'info');
+    addLocalLog('Starting download of TeamsShifts-Setup.exe...', 'info');
     try {
       const res = await fetch('/api/version/download', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          assetType,
+          assetType: 'installer',
           version: updateInfo?.latestVersion || 'latest',
-          downloadUrl: assetType === 'portable' ? updateInfo?.portableUrl : updateInfo?.downloadUrl,
+          downloadUrl: updateInfo?.downloadUrl,
           repo: updateInfo?.repo,
         }),
       });
@@ -159,10 +161,10 @@ export default function VersionPage() {
           downloadedBytes: 0,
           totalBytes: 0,
           speed: 'Starting...',
-          fileName: assetType === 'portable' ? 'TeamsShifts-Standalone.zip' : 'TeamsShifts-Setup.exe',
+          fileName: 'TeamsShifts-Setup.exe',
           version: updateInfo?.latestVersion || '',
           filePath: '',
-          assetType,
+          assetType: 'installer',
           error: null,
         });
       }
@@ -185,15 +187,15 @@ export default function VersionPage() {
     }
   };
 
-  const applyUpdate = async (assetType: 'installer' | 'portable') => {
+  const applyUpdate = async (assetType: 'installer' | 'portable' = 'installer') => {
     setIsUpdating(true);
-    addLocalLog(`Initializing zero-shell silent updater for ${assetType}...`, 'info');
+    addLocalLog('Initializing zero-shell silent updater...', 'info');
     try {
       const res = await fetch('/api/version/apply', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          assetType,
+          assetType: 'installer',
           filePath: downloadProgress?.filePath,
         }),
       });
@@ -209,13 +211,13 @@ export default function VersionPage() {
   };
 
   // Full 1-Click Update action (Downloads then automatically applies without shell)
-  const triggerOneClickUpdate = (assetType: 'installer' | 'portable') => {
-    setSelectedAssetType(assetType);
+  const triggerOneClickUpdate = (assetType: 'installer' | 'portable' = 'installer') => {
+    setSelectedAssetType('installer');
     setIsUpdating(true);
-    if (downloadProgress?.status === 'completed' && downloadProgress?.assetType === assetType) {
-      applyUpdate(assetType);
+    if (downloadProgress?.status === 'completed' && downloadProgress?.assetType === 'installer') {
+      applyUpdate('installer');
     } else {
-      startInAppDownload(assetType);
+      startInAppDownload('installer');
     }
   };
 
@@ -604,9 +606,20 @@ export default function VersionPage() {
                   {/* Version Leap Row */}
                   <div className="version-leap-row">
                     <div style={{ display: 'flex', flexDirection: 'column' }}>
-                      <span style={{ fontSize: '0.72rem', color: 'var(--slate-400)', textTransform: 'uppercase', fontWeight: 600 }}>Installed Edition</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+                        <span style={{ fontSize: '0.72rem', color: 'var(--slate-400)', textTransform: 'uppercase', fontWeight: 600 }}>Active Edition</span>
+                        {updateInfo?.isInstalled ? (
+                          <span className="badge" style={{ background: 'rgba(59, 130, 246, 0.2)', color: '#93c5fd', border: '1px solid rgba(59, 130, 246, 0.3)', fontSize: '0.62rem' }}>
+                            Full Installed
+                          </span>
+                        ) : (
+                          <span className="badge" style={{ background: 'rgba(245, 158, 11, 0.2)', color: '#fcd34d', border: '1px solid rgba(245, 158, 11, 0.3)', fontSize: '0.62rem' }}>
+                            Portable
+                          </span>
+                        )}
+                      </div>
                       <span style={{ fontSize: '1.15rem', fontWeight: 800, color: 'white', fontFamily: 'monospace' }}>
-                        v{updateInfo?.currentVersion || '1.0.13'}
+                        v{updateInfo?.currentVersion || '1.1.7'}
                       </span>
                     </div>
 
@@ -619,51 +632,104 @@ export default function VersionPage() {
                     <div style={{ display: 'flex', flexDirection: 'column', textAlign: 'right' }}>
                       <span style={{ fontSize: '0.72rem', color: 'var(--slate-400)', textTransform: 'uppercase', fontWeight: 600 }}>Latest Release</span>
                       <span style={{ fontSize: '1.15rem', fontWeight: 800, color: updateInfo?.hasUpdate ? '#60a5fa' : '#34d399', fontFamily: 'monospace' }}>
-                        v{updateInfo?.latestVersion || updateInfo?.currentVersion || '1.0.13'}
+                        v{updateInfo?.latestVersion || updateInfo?.currentVersion || '1.1.7'}
                       </span>
                     </div>
                   </div>
 
-                  {/* 1-Click Update Banner if Update Available */}
+                  {/* Update Area if Update Available */}
                   {updateInfo?.hasUpdate && (
-                    <div style={{ marginTop: '1.25rem', paddingTop: '1rem', borderTop: '1px solid rgba(59, 130, 246, 0.25)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                        <div style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(16, 185, 129, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#34d399' }}>
-                          <Sparkles size={18} />
-                        </div>
-                        <div>
-                          <div style={{ fontWeight: 700, fontSize: '0.9rem', color: 'white' }}>
-                            1-Click In-App Update Ready
+                    updateInfo?.isInstalled ? (
+                      /* Full Installed Edition: In-app 1-click update with auto-restart */
+                      <div style={{ marginTop: '1.25rem', paddingTop: '1rem', borderTop: '1px solid rgba(59, 130, 246, 0.25)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <div style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(16, 185, 129, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#34d399' }}>
+                            <Sparkles size={18} />
                           </div>
-                          <div style={{ fontSize: '0.75rem', color: 'var(--slate-300)' }}>
-                            Installs seamlessly inside the app with zero command prompt and automatic restart.
+                          <div>
+                            <div style={{ fontWeight: 700, fontSize: '0.9rem', color: 'white' }}>
+                              1-Click In-App Update Ready
+                            </div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--slate-300)' }}>
+                              Closes cleanly, runs installer silently, and relaunches automatically with the new version.
+                            </div>
                           </div>
                         </div>
-                      </div>
 
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <button
-                          type="button"
-                          className="btn"
-                          onClick={() => triggerOneClickUpdate('portable')}
-                          style={{
-                            padding: '0.65rem 1.25rem',
-                            fontWeight: 700,
-                            fontSize: '0.85rem',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 8,
-                            background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-                            color: 'white',
-                            borderRadius: 8,
-                            border: '1px solid #059669',
-                            boxShadow: '0 4px 15px rgba(16, 185, 129, 0.3)',
-                          }}
-                        >
-                          <Play size={16} /> ⚡ 1-Click Update & Restart (Portable)
-                        </button>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <button
+                            type="button"
+                            className="btn"
+                            onClick={() => triggerOneClickUpdate('installer')}
+                            style={{
+                              padding: '0.65rem 1.25rem',
+                              fontWeight: 700,
+                              fontSize: '0.85rem',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 8,
+                              background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                              color: 'white',
+                              borderRadius: 8,
+                              border: '1px solid #059669',
+                              boxShadow: '0 4px 15px rgba(16, 185, 129, 0.3)',
+                            }}
+                          >
+                            <Play size={16} /> ⚡ 1-Click Update & Restart
+                          </button>
+                        </div>
                       </div>
-                    </div>
+                    ) : (
+                      /* Portable Edition: Notification banner and download links (No in-app update runner) */
+                      <div style={{
+                        marginTop: '1.25rem',
+                        padding: '1rem 1.15rem',
+                        background: 'rgba(245, 158, 11, 0.08)',
+                        border: '1px solid rgba(245, 158, 11, 0.3)',
+                        borderRadius: 10,
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: '0.5rem' }}>
+                          <AlertCircle size={18} style={{ color: '#fbbf24', flexShrink: 0 }} />
+                          <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#fef3c7' }}>
+                            Portable Edition Update Available (v{updateInfo?.latestVersion})
+                          </div>
+                        </div>
+                        <div style={{ fontSize: '0.78rem', color: '#fde68a', lineHeight: 1.5, marginBottom: '0.85rem' }}>
+                          You are currently using the <strong>Portable Edition</strong> of Teams Shifts.
+                          Automatic in-app updating is exclusive to the <strong>Full Installed Version</strong>.
+                          To update your portable edition, download the latest standalone ZIP below and extract the files to your folder. Your database in <code>shifts.db</code> is kept safe.
+                        </div>
+                        <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+                          <a
+                            href={updateInfo?.portableUrl || `https://github.com/${updateInfo?.repo || 'Doffo-1/Teams-Shifts'}/releases/latest/download/TeamsShifts-Standalone.zip`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="btn btn-primary"
+                            style={{ padding: '0.5rem 0.9rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: 6, textDecoration: 'none' }}
+                          >
+                            <Download size={14} /> Download Portable ZIP (v{updateInfo?.latestVersion})
+                          </a>
+                          <a
+                            href={updateInfo?.downloadUrl || `https://github.com/${updateInfo?.repo || 'Doffo-1/Teams-Shifts'}/releases/latest/download/TeamsShifts-Setup.exe`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="btn btn-secondary"
+                            style={{ padding: '0.5rem 0.9rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: 6, textDecoration: 'none' }}
+                          >
+                            <Package size={14} /> Switch to Full Version (Setup.exe)
+                          </a>
+                          <a
+                            href={updateInfo?.releaseUrl || `https://github.com/${updateInfo?.repo || 'Doffo-1/Teams-Shifts'}/releases`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="btn btn-secondary"
+                            style={{ padding: '0.5rem 0.9rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: 6, textDecoration: 'none' }}
+                          >
+                            <ExternalLink size={14} /> View GitHub Release
+                          </a>
+                        </div>
+                      </div>
+                    )
                   )}
                 </div>
               )}
@@ -672,70 +738,67 @@ export default function VersionPage() {
               {!isUpdatingActive && (
                 <div style={{ marginBottom: '1.25rem' }}>
                   <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--slate-300)', marginBottom: '0.6rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                    {updateInfo?.hasUpdate ? 'Choose Installation Package' : 'Available Downloads & Reinstalls'}
+                    Available Packages
                   </div>
 
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-                    {/* Portable Edition Card */}
+                    {/* Windows Setup Card (Full Version) */}
                     <div style={{ background: 'rgba(30, 41, 59, 0.6)', border: '1px solid rgba(59, 130, 246, 0.3)', borderRadius: 10, padding: '1rem', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
                       <div>
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-                          <span style={{ fontSize: '0.92rem', fontWeight: 700, color: 'white' }}>Portable Edition (.zip)</span>
-                          <span className="badge" style={{ background: 'rgba(16, 185, 129, 0.2)', color: '#6ee7b7', border: '1px solid rgba(16, 185, 129, 0.3)', fontSize: '0.65rem' }}>Direct In-App</span>
-                        </div>
-                        <div style={{ fontSize: '0.75rem', color: 'var(--slate-300)', marginBottom: '0.85rem' }}>
-                          Self-contained update. Swaps application files cleanly without file locks and preserves your database.
-                        </div>
-                      </div>
-
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                        <button
-                          type="button"
-                          className="btn version-btn-glow"
-                          onClick={() => triggerOneClickUpdate('portable')}
-                          style={{ padding: '0.55rem 0.8rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
-                        >
-                          <Play size={14} /> ⚡ Update Portable In-App
-                        </button>
-                        <a
-                          href={updateInfo?.portableUrl || `https://github.com/${updateInfo?.repo || 'Doffo-1/Teams-Shifts'}/releases/latest/download/TeamsShifts-Standalone.zip`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          style={{ fontSize: '0.68rem', color: 'var(--slate-400)', textAlign: 'center', textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}
-                        >
-                          <ExternalLink size={11} /> Save zip via browser instead
-                        </a>
-                      </div>
-                    </div>
-
-                    {/* Windows Setup Card */}
-                    <div style={{ background: 'rgba(30, 41, 59, 0.6)', border: '1px solid rgba(71, 85, 105, 0.5)', borderRadius: 10, padding: '1rem', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-                      <div>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
                           <span style={{ fontSize: '0.92rem', fontWeight: 700, color: 'white' }}>Windows Setup (.exe)</span>
-                          <span className="badge" style={{ background: 'rgba(59, 130, 246, 0.2)', color: '#93c5fd', border: '1px solid rgba(59, 130, 246, 0.3)', fontSize: '0.65rem' }}>Installer</span>
+                          <span className="badge" style={{ background: 'rgba(59, 130, 246, 0.2)', color: '#93c5fd', border: '1px solid rgba(59, 130, 246, 0.3)', fontSize: '0.65rem' }}>
+                            Full Version
+                          </span>
                         </div>
                         <div style={{ fontSize: '0.75rem', color: 'var(--slate-300)', marginBottom: '0.85rem' }}>
-                          Standard Inno Setup installer. Runs silently in the background with zero shell windows.
+                          Standard Windows installer with Start Menu integration, desktop shortcuts, and seamless in-app automatic updates.
                         </div>
                       </div>
 
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                        <button
-                          type="button"
-                          className="btn btn-secondary"
-                          onClick={() => triggerOneClickUpdate('installer')}
-                          style={{ padding: '0.55rem 0.8rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, borderColor: 'rgba(71, 85, 105, 0.6)' }}
-                        >
-                          <Download size={14} /> 🚀 Update via Setup In-App
-                        </button>
+                        {updateInfo?.isInstalled && (
+                          <button
+                            type="button"
+                            className="btn version-btn-glow"
+                            onClick={() => triggerOneClickUpdate('installer')}
+                            style={{ padding: '0.55rem 0.8rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+                          >
+                            <Download size={14} /> 🚀 Update via Setup In-App
+                          </button>
+                        )}
                         <a
                           href={updateInfo?.downloadUrl || `https://github.com/${updateInfo?.repo || 'Doffo-1/Teams-Shifts'}/releases/latest/download/TeamsShifts-Setup.exe`}
                           target="_blank"
                           rel="noopener noreferrer"
                           style={{ fontSize: '0.68rem', color: 'var(--slate-400)', textAlign: 'center', textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}
                         >
-                          <ExternalLink size={11} /> Save exe via browser instead
+                          <ExternalLink size={11} /> Save exe via browser
+                        </a>
+                      </div>
+                    </div>
+
+                    {/* Portable Edition Card */}
+                    <div style={{ background: 'rgba(30, 41, 59, 0.6)', border: '1px solid rgba(71, 85, 105, 0.5)', borderRadius: 10, padding: '1rem', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+                      <div>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                          <span style={{ fontSize: '0.92rem', fontWeight: 700, color: 'white' }}>Portable Edition (.zip)</span>
+                          <span className="badge" style={{ background: 'rgba(100, 116, 139, 0.2)', color: '#cbd5e1', border: '1px solid rgba(100, 116, 139, 0.3)', fontSize: '0.65rem' }}>Portable</span>
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--slate-300)', marginBottom: '0.85rem' }}>
+                          Standalone portable ZIP. Requires zero installation. Updates are applied manually by extracting over your folder.
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        <a
+                          href={updateInfo?.portableUrl || `https://github.com/${updateInfo?.repo || 'Doffo-1/Teams-Shifts'}/releases/latest/download/TeamsShifts-Standalone.zip`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="btn btn-secondary"
+                          style={{ padding: '0.55rem 0.8rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, textDecoration: 'none' }}
+                        >
+                          <Download size={14} /> Save Portable ZIP via browser
                         </a>
                       </div>
                     </div>

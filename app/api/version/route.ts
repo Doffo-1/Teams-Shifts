@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { APP_VERSION, DEFAULT_GITHUB_REPO } from '@/lib/version';
+import { isAppInstalled } from '@/lib/edition';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -88,6 +89,7 @@ async function checkViaWebRedirect(repo: string) {
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const repo = searchParams.get('repo') || process.env.GITHUB_REPO || DEFAULT_GITHUB_REPO;
+  const isInstalled = isAppInstalled();
 
   const responseData = {
     currentVersion: APP_VERSION,
@@ -102,6 +104,8 @@ export async function GET(request: Request) {
     repo: repo,
     lastChecked: new Date().toISOString(),
     error: null as string | null,
+    isInstalled: isInstalled,
+    edition: isInstalled ? ('installed' as const) : ('portable' as const),
   };
 
   if (!repo || repo === 'your-username/teams-shifts') {

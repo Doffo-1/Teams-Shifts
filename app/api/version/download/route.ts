@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { DEFAULT_GITHUB_REPO } from '@/lib/version';
+import { isAppInstalled } from '@/lib/edition';
 
 interface DownloadState {
   status: 'idle' | 'downloading' | 'completed' | 'error';
@@ -105,16 +106,23 @@ export async function GET(request: Request) {
   });
 }
 
-// POST: Start in-app download
+// POST: Start in-app download (Full Installed Edition only)
 export async function POST(request: Request) {
   try {
+    if (!isAppInstalled()) {
+      return NextResponse.json(
+        { error: 'In-app update downloading is only available for the full installed version of Teams Shifts.' },
+        { status: 400 }
+      );
+    }
+
     const body = await request.json().catch(() => ({}));
-    const assetType: 'installer' | 'portable' = body.assetType === 'portable' ? 'portable' : 'installer';
+    const assetType: 'installer' = 'installer';
     const version: string = body.version || 'latest';
     let downloadUrl: string = body.downloadUrl || '';
 
     const updatesDir = getUpdatesDir();
-    const fileName = assetType === 'portable' ? 'TeamsShifts-Standalone.zip' : 'TeamsShifts-Setup.exe';
+    const fileName = 'TeamsShifts-Setup.exe';
     const targetFilePath = path.join(updatesDir, fileName);
     const tempFilePath = targetFilePath + '.part';
 

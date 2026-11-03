@@ -258,6 +258,13 @@ namespace TeamsShiftsLauncher
                 psi.EnvironmentVariables["TZ"] = "Europe/Amsterdam";
                 psi.EnvironmentVariables["NODE_TLS_REJECT_UNAUTHORIZED"] = "0";
 
+                // Detect if running as full installed version or portable edition
+                bool isInstalled = File.Exists(Path.Combine(appDir, "unins000.exe")) ||
+                                   File.Exists(Path.Combine(appDir, "unins001.exe")) ||
+                                   File.Exists(Path.Combine(appDir, "installed.marker"));
+                psi.EnvironmentVariables["TEAMS_SHIFTS_EDITION"] = isInstalled ? "installed" : "portable";
+                psi.EnvironmentVariables["TEAMS_SHIFTS_APP_DIR"] = appDir;
+
                 nodeProcess = new Process { StartInfo = psi, EnableRaisingEvents = true };
 
                 // Log output to file
@@ -527,7 +534,17 @@ namespace TeamsShiftsLauncher
 
             contextMenu.MenuItems.Add("-");
 
-            MenuItem versionItem = new MenuItem("✨ Version 1.0.0 (Check Updates)", (s, e) => OpenApplicationWindow());
+            string appVer = "1.0.0";
+            try
+            {
+                Version v = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
+                if (v != null)
+                {
+                    appVer = v.Major + "." + v.Minor + "." + Math.Max(0, v.Build);
+                }
+            }
+            catch { }
+            MenuItem versionItem = new MenuItem("✨ Version " + appVer + " (Check Updates)", (s, e) => OpenApplicationWindow());
             contextMenu.MenuItems.Add(versionItem);
             contextMenu.MenuItems.Add("-");
 
@@ -790,6 +807,7 @@ namespace TeamsShiftsLauncher
 
         private const int JobObjectExtendedLimitInformation = 9;
         private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000;
+        private const uint JOB_OBJECT_LIMIT_BREAKAWAY_OK = 0x0800;
 
         [StructLayout(LayoutKind.Sequential)]
         struct IO_COUNTERS
@@ -833,7 +851,7 @@ namespace TeamsShiftsLauncher
             {
                 jobHandle = CreateJobObject(IntPtr.Zero, null);
                 var info = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
-                info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK;
 
                 int length = Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION));
                 IntPtr extendedInfoPtr = Marshal.AllocHGlobal(length);

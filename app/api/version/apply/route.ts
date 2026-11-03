@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { spawn } from 'child_process';
+import { getAppDir, isAppInstalled } from '@/lib/edition';
 
 interface ApplyLog {
   time: string;
@@ -12,7 +13,7 @@ interface ApplyLog {
 
 interface ApplyState {
   status: 'idle' | 'preparing' | 'extracting' | 'verifying' | 'staging' | 'restarting' | 'error';
-  step: number; // 1: Download, 2: Extract & Verify, 3: Stage Update, 4: Silent Restart
+  step: number; // 1: Download, 2: Verify Setup, 3: Arm Silent Runner, 4: Silent Restart
   totalSteps: number;
   progress: number;
   message: string;
@@ -20,12 +21,11 @@ interface ApplyState {
   logs: ApplyLog[];
   error: string | null;
   targetFile?: string;
-  assetType?: 'installer' | 'portable';
+  assetType?: 'installer';
 }
 
 const globalForApply = global as unknown as {
   applyState?: ApplyState;
-  activeStagingDir?: string;
 };
 
 if (!globalForApply.applyState) {
@@ -67,18 +67,6 @@ function addLog(text: string, type: 'info' | 'success' | 'warn' | 'error' = 'inf
   }
 }
 
-function getAppDir(): string {
-  let dir = process.cwd();
-  // If running in standalone (inside dist/TeamsShifts/app or standalone-app/app), parent is app root
-  if (path.basename(dir).toLowerCase() === 'app') {
-    const parentDir = path.dirname(dir);
-    if (fs.existsSync(path.join(parentDir, 'TeamsShifts.exe')) || fs.existsSync(path.join(parentDir, 'runtime'))) {
-      return parentDir;
-    }
-  }
-  return dir;
-}
-
 // GET: Status of in-progress update application
 export async function GET() {
   const state = globalForApply.applyState || {
@@ -98,11 +86,6 @@ export async function GET() {
 // DELETE: Cancel update application if in non-final state
 export async function DELETE() {
   if (globalForApply.applyState && globalForApply.applyState.status !== 'restarting') {
-    if (globalForApply.activeStagingDir && fs.existsSync(globalForApply.activeStagingDir)) {
-      try {
-        fs.rmSync(globalForApply.activeStagingDir, { recursive: true, force: true });
-      } catch {}
-    }
     globalForApply.applyState = {
       status: 'idle',
       step: 1,
@@ -117,22 +100,28 @@ export async function DELETE() {
   return NextResponse.json({ success: true, message: 'Update reset' });
 }
 
-// POST: Execute in-app update pipeline without opening any command prompt or shell window
+// POST: Execute in-app update for the Full Installed edition only
 export async function POST(request: Request) {
   try {
+    // Check if running as full installed edition
+    if (!isAppInstalled()) {
+      return NextResponse.json(
+        { error: 'In-app automatic updates are only available for the full installed version of Teams Shifts. Portable installations should download the release ZIP directly from GitHub.' },
+        { status: 400 }
+      );
+    }
+
     const body = await request.json().catch(() => ({}));
-    const assetType: 'installer' | 'portable' = body.assetType === 'portable' ? 'portable' : 'installer';
     const updatesDir = getUpdatesDir();
 
     let targetFilePath = body.filePath;
     if (!targetFilePath || !fs.existsSync(targetFilePath)) {
-      const fileName = assetType === 'portable' ? 'TeamsShifts-Standalone.zip' : 'TeamsShifts-Setup.exe';
-      targetFilePath = path.join(updatesDir, fileName);
+      targetFilePath = path.join(updatesDir, 'TeamsShifts-Setup.exe');
     }
 
     if (!fs.existsSync(targetFilePath)) {
       return NextResponse.json(
-        { error: `Update package file not found at: ${targetFilePath}. Please download it first.` },
+        { error: `Setup installer file not found at: ${targetFilePath}. Please download it first.` },
         { status: 404 }
       );
     }
@@ -140,7 +129,7 @@ export async function POST(request: Request) {
     const fileStats = fs.statSync(targetFilePath);
     if (fileStats.size < 1024 * 1024) {
       return NextResponse.json(
-        { error: `Update package file appears incomplete (${formatBytes(fileStats.size)}). Please re-download.` },
+        { error: `Setup installer file appears incomplete (${formatBytes(fileStats.size)}). Please re-download.` },
         { status: 400 }
       );
     }
@@ -150,301 +139,188 @@ export async function POST(request: Request) {
       status: 'preparing',
       step: 2,
       totalSteps: 4,
-      progress: 20,
-      message: 'Verifying update package...',
+      progress: 25,
+      message: 'Verifying setup installer...',
       detail: `Package size: ${formatBytes(fileStats.size)}`,
       logs: [],
       error: null,
       targetFile: path.basename(targetFilePath),
-      assetType,
+      assetType: 'installer',
     };
 
     addLog(`Initiated update application pipeline for ${path.basename(targetFilePath)}`, 'info');
-    addLog(`Package verified on disk: ${formatBytes(fileStats.size)}`, 'success');
+    addLog(`Setup installer verified on disk: ${formatBytes(fileStats.size)}`, 'success');
 
     // Run async background processing
     (async () => {
       try {
         const appDir = getAppDir();
-        const tempDir = os.tmpdir();
         const flagFile = path.join(updatesDir, '.updating');
 
-        // Mark update in progress for watchdog
+        // Mark update in progress
         try {
           fs.writeFileSync(flagFile, Date.now().toString());
         } catch {}
 
-        if (assetType === 'portable') {
-          // --- PORTABLE UPDATE PIPELINE ---
-          const stagingDir = path.join(tempDir, `TeamsShifts_Update_${Date.now()}`);
-          globalForApply.activeStagingDir = stagingDir;
-
-          if (globalForApply.applyState) {
-            globalForApply.applyState.status = 'extracting';
-            globalForApply.applyState.step = 2;
-            globalForApply.applyState.progress = 35;
-            globalForApply.applyState.message = 'Unpacking update archive...';
-            globalForApply.applyState.detail = 'Extracting binaries and Next.js bundle to temporary staging area';
-          }
-          addLog('Extracting update package to staging directory...', 'info');
-
-          // Extract using fast .NET ZipFile via PowerShell (headless, no window, no console)
-          const psScript = `
-            $ErrorActionPreference = 'Stop'
-            Add-Type -AssemblyName System.IO.Compression.FileSystem
-            if (-not (Test-Path -LiteralPath '${stagingDir.replace(/'/g, "''")}')) {
-              New-Item -ItemType Directory -Path '${stagingDir.replace(/'/g, "''")}' -Force | Out-Null
-            }
-            [System.IO.Compression.ZipFile]::ExtractToDirectory('${targetFilePath.replace(/'/g, "''")}', '${stagingDir.replace(/'/g, "''")}')
-          `;
-
-          await new Promise<void>((resolve, reject) => {
-            const ps = spawn(
-              'powershell.exe',
-              ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-Command', psScript],
-              {
-                windowsHide: true,
-                stdio: ['ignore', 'pipe', 'pipe'],
-              }
-            );
-
-            let stderrData = '';
-            ps.stderr?.on('data', (d: Buffer | string) => {
-              stderrData += d.toString();
-            });
-
-            ps.on('close', (code) => {
-              if (code === 0) {
-                resolve();
-              } else {
-                // Fallback to Expand-Archive if ZipFile method encountered issues
-                addLog('Trying standard archive expansion fallback...', 'warn');
-                const fallback = spawn(
-                  'powershell.exe',
-                  ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-Command',
-                   `Expand-Archive -LiteralPath '${targetFilePath.replace(/'/g, "''")}' -DestinationPath '${stagingDir.replace(/'/g, "''")}' -Force`],
-                  { windowsHide: true, stdio: 'ignore' }
-                );
-                fallback.on('close', (fCode) => {
-                  if (fCode === 0) resolve();
-                  else reject(new Error(stderrData || `Extraction failed with code ${code}`));
-                });
-              }
-            });
-
-            ps.on('error', (err) => reject(err));
-          });
-
-          addLog('Archive unpacked successfully.', 'success');
-
-          // Locate source directory containing updated files
-          let sourceDir = stagingDir;
-          if (fs.existsSync(path.join(stagingDir, 'TeamsShifts', 'TeamsShifts.exe')) || fs.existsSync(path.join(stagingDir, 'TeamsShifts', 'app'))) {
-            sourceDir = path.join(stagingDir, 'TeamsShifts');
-          }
-
-          if (globalForApply.applyState) {
-            globalForApply.applyState.status = 'verifying';
-            globalForApply.applyState.step = 3;
-            globalForApply.applyState.progress = 65;
-            globalForApply.applyState.message = 'Verifying unpacked application files...';
-            globalForApply.applyState.detail = 'Checking launcher binaries, runtime and application assets';
-          }
-          addLog('Verifying application bundle files in staging area...', 'info');
-
-          const hasLauncher = fs.existsSync(path.join(sourceDir, 'TeamsShifts.exe'));
-          const hasApp = fs.existsSync(path.join(sourceDir, 'app', 'server.js')) || fs.existsSync(path.join(sourceDir, 'app'));
-
-          if (!hasLauncher && !hasApp) {
-            throw new Error('Unpacked archive did not contain valid TeamsShifts application files.');
-          }
-
-          addLog('Files verified: TeamsShifts.exe and application bundle confirmed.', 'success');
-          addLog('Safeguarding database: shifts.db will be preserved.', 'info');
-
-          if (globalForApply.applyState) {
-            globalForApply.applyState.status = 'staging';
-            globalForApply.applyState.step = 3;
-            globalForApply.applyState.progress = 85;
-            globalForApply.applyState.message = 'Preparing silent update runner...';
-            globalForApply.applyState.detail = 'Configuring zero-shell background file replacement and restart script';
-          }
-
-          // Build silent PowerShell & CMD fallback update runner (zero console window, works with enterprise policies)
-          const ts = Date.now();
-          const psPath = path.join(tempDir, `teams-shifts-updater-${ts}.ps1`);
-          const cmdPath = path.join(tempDir, `teams-shifts-updater-${ts}.cmd`);
-
-          const psContent = [
-            `$ErrorActionPreference = 'SilentlyContinue'`,
-            `Start-Sleep -Milliseconds 2500`,
-            `Get-Process -Name TeamsShifts -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue`,
-            `Get-Process -Name node -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue`,
-            `Start-Sleep -Milliseconds 500`,
-            `& robocopy.exe "${sourceDir}" "${appDir}" /E /XD "${appDir}\\data" /XF "*.db" /NP /NJS /NJH /R:2 /W:1 | Out-Null`,
-            `if (Test-Path "${stagingDir}") { Remove-Item -Path "${stagingDir}" -Recurse -Force -ErrorAction SilentlyContinue }`,
-            `if (Test-Path "${flagFile}") { Remove-Item -Path "${flagFile}" -Force -ErrorAction SilentlyContinue }`,
-            `if (Test-Path "${appDir}\\TeamsShifts.exe") { Start-Process -FilePath "${appDir}\\TeamsShifts.exe" -WindowStyle Normal }`,
-            `Remove-Item -Path $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue`,
-          ].join('\r\n');
-
-          const cmdContent = [
-            `@echo off`,
-            `timeout /t 3 >nul`,
-            `taskkill /F /IM TeamsShifts.exe /T >nul 2>&1`,
-            `taskkill /F /IM node.exe /T >nul 2>&1`,
-            `timeout /t 1 >nul`,
-            `robocopy "${sourceDir}" "${appDir}" /E /XD "${appDir}\\data" /XF "*.db" /NP /NJS /NJH /R:2 /W:1 >nul 2>&1`,
-            `if exist "${stagingDir}" rd /s /q "${stagingDir}" >nul 2>&1`,
-            `if exist "${flagFile}" del /f /q "${flagFile}" >nul 2>&1`,
-            `if exist "${appDir}\\TeamsShifts.exe" start "" "${appDir}\\TeamsShifts.exe"`,
-            `del /f /q "%~f0" >nul 2>&1`,
-          ].join('\r\n');
-
-          fs.writeFileSync(psPath, psContent, 'utf8');
-          fs.writeFileSync(cmdPath, cmdContent, 'utf8');
-          addLog('Silent background runner armed (zero console window).', 'success');
-
-          if (globalForApply.applyState) {
-            globalForApply.applyState.status = 'restarting';
-            globalForApply.applyState.step = 4;
-            globalForApply.applyState.progress = 100;
-            globalForApply.applyState.message = 'Restarting Teams Shifts now...';
-            globalForApply.applyState.detail = 'Application will relaunch automatically in 2-3 seconds with new version';
-          }
-          addLog('Teams Shifts is restarting cleanly. Relaunching in 3 seconds...', 'info');
-
-          // Launch updater using PowerShell (with CMD fallback)
-          try {
-            const runner = spawn('powershell.exe', [
-              '-NoProfile',
-              '-NonInteractive',
-              '-WindowStyle', 'Hidden',
-              '-ExecutionPolicy', 'Bypass',
-              '-File', psPath,
-            ], {
-              detached: true,
-              stdio: 'ignore',
-              windowsHide: true,
-            });
-            runner.unref();
-          } catch (psErr: any) {
-            console.warn('[AutoUpdate] PowerShell spawn failed, launching cmd fallback:', psErr);
-            const cmdRunner = spawn('cmd.exe', ['/c', 'start', '/b', '""', cmdPath], {
-              detached: true,
-              stdio: 'ignore',
-              windowsHide: true,
-            });
-            cmdRunner.unref();
-          }
-
-          // Exit node process gracefully after 2.5s
-          setTimeout(() => {
-            console.log('[AutoUpdate] Graceful exit for silent update application...');
-            process.exit(0);
-          }, 2500);
-
-        } else {
-          // --- INSTALLER UPDATE PIPELINE ---
-          if (globalForApply.applyState) {
-            globalForApply.applyState.status = 'verifying';
-            globalForApply.applyState.step = 2;
-            globalForApply.applyState.progress = 50;
-            globalForApply.applyState.message = 'Verifying setup installer...';
-            globalForApply.applyState.detail = `Checking ${path.basename(targetFilePath)} executable headers`;
-          }
-          addLog(`Verifying setup installer executable: ${path.basename(targetFilePath)}`, 'info');
-          addLog('Installer package verified.', 'success');
-
-          if (globalForApply.applyState) {
-            globalForApply.applyState.status = 'staging';
-            globalForApply.applyState.step = 3;
-            globalForApply.applyState.progress = 85;
-            globalForApply.applyState.message = 'Preparing silent setup runner...';
-            globalForApply.applyState.detail = 'Configuring background installer execution and automatic restart';
-          }
-
-          // Build silent PowerShell & CMD fallback installer runner
-          const ts = Date.now();
-          const psPath = path.join(tempDir, `teams-shifts-installer-${ts}.ps1`);
-          const cmdPath = path.join(tempDir, `teams-shifts-installer-${ts}.cmd`);
-
-          const innoFlags = '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /CLOSEAPPLICATIONS /FORCECLOSEAPPLICATIONS';
-
-          const psContent = [
-            `$ErrorActionPreference = 'SilentlyContinue'`,
-            `Start-Sleep -Milliseconds 2500`,
-            `Get-Process -Name TeamsShifts -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue`,
-            `Get-Process -Name node -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue`,
-            `Start-Sleep -Milliseconds 500`,
-            `$proc = Start-Process -FilePath "${targetFilePath}" -ArgumentList "${innoFlags}" -Wait -PassThru`,
-            `Start-Sleep -Milliseconds 1000`,
-            `if (Test-Path "${flagFile}") { Remove-Item -Path "${flagFile}" -Force -ErrorAction SilentlyContinue }`,
-            `$exePath = "${appDir}\\TeamsShifts.exe"`,
-            `if (-not (Test-Path $exePath)) {`,
-            `  $reg = Get-ItemProperty "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*" -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like "*Teams Shifts*" } | Select-Object -First 1`,
-            `  if ($reg -and $reg.InstallLocation) { $exePath = Join-Path $reg.InstallLocation "TeamsShifts.exe" }`,
-            `}`,
-            `if (Test-Path $exePath) { Start-Process -FilePath $exePath -WindowStyle Normal }`,
-            `Remove-Item -Path $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue`,
-          ].join('\r\n');
-
-          const cmdContent = [
-            `@echo off`,
-            `timeout /t 3 >nul`,
-            `taskkill /F /IM TeamsShifts.exe /T >nul 2>&1`,
-            `taskkill /F /IM node.exe /T >nul 2>&1`,
-            `timeout /t 1 >nul`,
-            `"${targetFilePath}" ${innoFlags}`,
-            `timeout /t 1 >nul`,
-            `if exist "${flagFile}" del /f /q "${flagFile}" >nul 2>&1`,
-            `if exist "${appDir}\\TeamsShifts.exe" start "" "${appDir}\\TeamsShifts.exe"`,
-            `del /f /q "%~f0" >nul 2>&1`,
-          ].join('\r\n');
-
-          fs.writeFileSync(psPath, psContent, 'utf8');
-          fs.writeFileSync(cmdPath, cmdContent, 'utf8');
-          addLog('Silent setup runner armed (zero console window).', 'success');
-
-          if (globalForApply.applyState) {
-            globalForApply.applyState.status = 'restarting';
-            globalForApply.applyState.step = 4;
-            globalForApply.applyState.progress = 100;
-            globalForApply.applyState.message = 'Restarting Teams Shifts now...';
-            globalForApply.applyState.detail = 'Silent setup is updating files and will relaunch Teams Shifts automatically';
-          }
-          addLog('Teams Shifts is closing down for silent setup. Relaunching in 3 seconds...', 'info');
-
-          // Launch runner via PowerShell (with CMD fallback)
-          try {
-            const runner = spawn('powershell.exe', [
-              '-NoProfile',
-              '-NonInteractive',
-              '-WindowStyle', 'Hidden',
-              '-ExecutionPolicy', 'Bypass',
-              '-File', psPath,
-            ], {
-              detached: true,
-              stdio: 'ignore',
-              windowsHide: true,
-            });
-            runner.unref();
-          } catch (psErr: any) {
-            console.warn('[AutoUpdate] PowerShell spawn failed, launching cmd fallback:', psErr);
-            const cmdRunner = spawn('cmd.exe', ['/c', 'start', '/b', '""', cmdPath], {
-              detached: true,
-              stdio: 'ignore',
-              windowsHide: true,
-            });
-            cmdRunner.unref();
-          }
-
-          // Exit node process gracefully after 2.5s
-          setTimeout(() => {
-            console.log('[AutoUpdate] Graceful exit for silent installer execution...');
-            process.exit(0);
-          }, 2500);
+        if (globalForApply.applyState) {
+          globalForApply.applyState.status = 'verifying';
+          globalForApply.applyState.step = 2;
+          globalForApply.applyState.progress = 50;
+          globalForApply.applyState.message = 'Verifying setup installer...';
+          globalForApply.applyState.detail = `Checking ${path.basename(targetFilePath)} executable headers`;
         }
+        addLog(`Verifying setup installer executable: ${path.basename(targetFilePath)}`, 'info');
+        addLog('Installer package verified.', 'success');
+
+        if (globalForApply.applyState) {
+          globalForApply.applyState.status = 'staging';
+          globalForApply.applyState.step = 3;
+          globalForApply.applyState.progress = 75;
+          globalForApply.applyState.message = 'Preparing silent setup runner...';
+          globalForApply.applyState.detail = 'Configuring detached background installer execution and automatic relaunch';
+        }
+
+        // Build detached PowerShell and CMD update runners
+        const ts = Date.now();
+        const psPath = path.join(updatesDir, `teams-shifts-installer-${ts}.ps1`);
+        const cmdPath = path.join(updatesDir, `teams-shifts-installer-${ts}.cmd`);
+
+        const escAppDir = appDir.replace(/'/g, "''");
+        const escInstallerPath = targetFilePath.replace(/'/g, "''");
+        const escFlagFile = flagFile.replace(/'/g, "''");
+        const exePath = path.join(appDir, 'TeamsShifts.exe');
+        const escExePath = exePath.replace(/'/g, "''");
+
+        const psContent = [
+          `$ErrorActionPreference = 'SilentlyContinue'`,
+          ``,
+          `# 1. Allow web server 2.5 seconds to return HTTP response to client`,
+          `Start-Sleep -Milliseconds 2500`,
+          ``,
+          `# 2. Wait up to 10 seconds for TeamsShifts and node to exit cleanly`,
+          `$deadline = (Get-Date).AddSeconds(10)`,
+          `while ((Get-Date) -lt $deadline) {`,
+          `    $procs = Get-Process -Name TeamsShifts,node -ErrorAction SilentlyContinue`,
+          `    if (-not $procs) { break }`,
+          `    Start-Sleep -Milliseconds 500`,
+          `}`,
+          ``,
+          `# Force terminate any remaining instances if still running`,
+          `Get-Process -Name TeamsShifts,node -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue`,
+          `Start-Sleep -Milliseconds 800`,
+          ``,
+          `# 3. Check if writing to appDir requires administrator elevation`,
+          `$needsElevation = $false`,
+          `try {`,
+          `    $testFile = Join-Path '${escAppDir}' (".write_test_" + [Guid]::NewGuid().ToString('N'))`,
+          `    [System.IO.File]::WriteAllText($testFile, "test")`,
+          `    [System.IO.File]::Delete($testFile)`,
+          `} catch {`,
+          `    $needsElevation = $true`,
+          `}`,
+          ``,
+          `# 4. Run Inno Setup installer silently, targeting the exact appDir`,
+          `$innoArgs = @(`,
+          `    '/VERYSILENT',`,
+          `    '/SUPPRESSMSGBOXES',`,
+          `    '/NORESTART',`,
+          `    '/SP-',`,
+          `    '/CLOSEAPPLICATIONS',`,
+          `    '/FORCECLOSEAPPLICATIONS',`,
+          `    '/DIR="${escAppDir}"'`,
+          `)`,
+          `$argString = $innoArgs -join ' '`,
+          ``,
+          `if ($needsElevation) {`,
+          `    $proc = Start-Process -FilePath '${escInstallerPath}' -ArgumentList $argString -Verb RunAs -Wait -PassThru`,
+          `} else {`,
+          `    $proc = Start-Process -FilePath '${escInstallerPath}' -ArgumentList $argString -Wait -PassThru -WindowStyle Hidden`,
+          `}`,
+          ``,
+          `Start-Sleep -Seconds 2`,
+          ``,
+          `# 5. Clean up updating flag`,
+          `if (Test-Path '${escFlagFile}') {`,
+          `    Remove-Item -Path '${escFlagFile}' -Force -ErrorAction SilentlyContinue`,
+          `}`,
+          ``,
+          `# 6. Relaunch updated Teams Shifts application`,
+          `$targetExe = '${escExePath}'`,
+          `if (-not (Test-Path $targetExe)) {`,
+          `    $reg = Get-ItemProperty "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*" -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like "*Teams Shifts*" } | Select-Object -First 1`,
+          `    if ($reg -and $reg.InstallLocation) {`,
+          `        $targetExe = Join-Path $reg.InstallLocation "TeamsShifts.exe"`,
+          `    }`,
+          `}`,
+          ``,
+          `if (Test-Path $targetExe) {`,
+          `    Start-Process -FilePath $targetExe -WindowStyle Normal`,
+          `}`,
+          ``,
+          `# 7. Clean up script files`,
+          `Start-Sleep -Seconds 2`,
+          `Remove-Item -Path '${psPath.replace(/'/g, "''")}' -Force -ErrorAction SilentlyContinue`,
+          `Remove-Item -Path '${cmdPath.replace(/'/g, "''")}' -Force -ErrorAction SilentlyContinue`,
+        ].join('\r\n');
+
+        const cmdContent = [
+          `@echo off`,
+          `timeout /t 3 >nul`,
+          `taskkill /F /IM TeamsShifts.exe >nul 2>&1`,
+          `taskkill /F /IM node.exe >nul 2>&1`,
+          `timeout /t 1 >nul`,
+          `"${targetFilePath}" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /CLOSEAPPLICATIONS /FORCECLOSEAPPLICATIONS /DIR="${appDir}"`,
+          `timeout /t 2 >nul`,
+          `if exist "${flagFile}" del /f /q "${flagFile}" >nul 2>&1`,
+          `if exist "${exePath}" start "" "${exePath}"`,
+          `del /f /q "%~f0" >nul 2>&1`,
+        ].join('\r\n');
+
+        fs.writeFileSync(psPath, psContent, 'utf8');
+        fs.writeFileSync(cmdPath, cmdContent, 'utf8');
+        addLog('Silent setup runner armed (detached process).', 'success');
+
+        if (globalForApply.applyState) {
+          globalForApply.applyState.status = 'restarting';
+          globalForApply.applyState.step = 4;
+          globalForApply.applyState.progress = 100;
+          globalForApply.applyState.message = 'Restarting Teams Shifts now...';
+          globalForApply.applyState.detail = 'Silent setup is updating files and will relaunch Teams Shifts automatically in a few seconds.';
+        }
+        addLog('Teams Shifts is closing down for silent setup. Relaunching automatically...', 'info');
+
+        // Launch updater detached via WMI Win32_Process.Create so it runs completely independent of Node's process tree and Job Object
+        const wmiCmd = `(Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = 'powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "${psPath.replace(/\\/g, '\\\\')}"' }).ReturnValue`;
+
+        try {
+          const wmiRunner = spawn('powershell.exe', [
+            '-NoProfile',
+            '-NonInteractive',
+            '-WindowStyle', 'Hidden',
+            '-ExecutionPolicy', 'Bypass',
+            '-Command',
+            wmiCmd,
+          ], {
+            detached: true,
+            stdio: 'ignore',
+            windowsHide: true,
+          });
+          wmiRunner.unref();
+        } catch (wmiErr: any) {
+          console.warn('[AutoUpdate] WMI spawn failed, using cmd start fallback:', wmiErr);
+          const cmdRunner = spawn('cmd.exe', ['/c', 'start', '""', '/b', 'powershell.exe', '-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', psPath], {
+            detached: true,
+            stdio: 'ignore',
+            windowsHide: true,
+          });
+          cmdRunner.unref();
+        }
+
+        // Gracefully exit node process after 2 seconds
+        setTimeout(() => {
+          console.log('[AutoUpdate] Graceful exit for silent installer execution...');
+          process.exit(0);
+        }, 2000);
       } catch (err: any) {
         console.error('[AutoUpdate] Background apply error:', err);
         addLog(`Update failed: ${err?.message || err}`, 'error');
