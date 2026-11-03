@@ -8,6 +8,8 @@ import {
   startOfWeek,
   addDays,
   isSameDay,
+  getISOWeek,
+  getWeekOfMonth,
 } from 'date-fns';
 import {
   Calendar,
@@ -29,6 +31,7 @@ import {
   Upload,
   Settings,
   Building,
+  Building2,
   Home as HomeIcon,
   Check,
   Shield,
@@ -42,10 +45,12 @@ import {
   ExternalLink,
   RefreshCw,
   ArrowRight,
+  ArrowLeft,
   CheckCircle2,
   Package,
   HardDrive,
   CalendarCheck,
+  CalendarDays,
   Repeat,
   Play,
   RotateCcw,
@@ -120,6 +125,25 @@ interface Shift {
   color?: string | null;
 }
 
+interface ClientData {
+  id: string;
+  teamId: string;
+  name: string;
+  color?: string | null;
+  location?: string | null;
+  startTime?: string | null;
+  endTime?: string | null;
+  frequency: 'EVERY_WEEK' | 'EVERY_OTHER_WEEK' | 'EVERY_MONTH';
+  weekParity?: 'ALL' | 'EVEN' | 'ODD' | null;
+  monthlyWeek?: number | null;
+  days: number[];
+  assignedEmployeeIds: string[];
+  memberDayMap?: Record<string, string> | null;
+  requiredMembersPerDay?: number;
+  notes?: string | null;
+  isActive?: boolean;
+}
+
 export default function Home() {
   const [mounted, setMounted] = useState(false);
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -128,6 +152,46 @@ export default function Home() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [shifts, setShifts] = useState<Shift[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Clients state
+  const [teamClients, setTeamClients] = useState<ClientData[]>([]);
+  const [clientDropdownOpen, setClientDropdownOpen] = useState(false);
+  const [clientModalOpen, setClientModalOpen] = useState(false);
+  const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
+  const [clientForm, setClientForm] = useState<{
+    id?: string;
+    name: string;
+    color: string;
+    location: string;
+    startTime: string;
+    endTime: string;
+    frequency: 'EVERY_WEEK' | 'EVERY_OTHER_WEEK' | 'EVERY_MONTH';
+    weekParity: 'ALL' | 'EVEN' | 'ODD';
+    monthlyWeek: number;
+    days: number[];
+    assignedEmployeeIds: string[];
+    memberDayMap: Record<string, string>;
+    requiredMembersPerDay: number;
+    notes: string;
+    isActive: boolean;
+  }>({
+    name: '',
+    color: 'PINK',
+    location: '',
+    startTime: '08:30',
+    endTime: '17:00',
+    frequency: 'EVERY_OTHER_WEEK',
+    weekParity: 'ODD',
+    monthlyWeek: 1,
+    days: [3],
+    assignedEmployeeIds: [],
+    memberDayMap: {},
+    requiredMembersPerDay: 1,
+    notes: '',
+    isActive: true,
+  });
+  const [clientMemberSearch, setClientMemberSearch] = useState('');
+  const [applyingClient, setApplyingClient] = useState(false);
 
   useEffect(() => {
     console.log('[TeamsShifts] useEffect mount running on client!');
@@ -765,7 +829,7 @@ export default function Home() {
     loadTeams();
   }, []);
 
-  // Load Schedule & Employees for selected team and date
+  // Load Schedule, Employees & Clients for selected team and date
   const loadData = async (teamIdOverride?: string) => {
     const teamId = teamIdOverride || selectedTeamId || currentTeam?.id;
     if (!teamId) {
@@ -774,12 +838,23 @@ export default function Home() {
     }
     setLoading(true);
     try {
-      const [empRes, shiftRes] = await Promise.all([
+      const [empRes, shiftRes, clientRes] = await Promise.all([
         fetch(`/api/employees?teamId=${teamId}`, { cache: 'no-store' }),
         fetch(`/api/shifts?date=${start.toISOString()}&teamId=${teamId}`, { cache: 'no-store' }),
+        fetch(`/api/clients?teamId=${teamId}`, { cache: 'no-store' }),
       ]);
       if (empRes.ok) setEmployees(await empRes.json());
       if (shiftRes.ok) setShifts(await shiftRes.json());
+      if (clientRes.ok) {
+        const clientData = await clientRes.json();
+        const parsedClients: ClientData[] = (clientData.clients || []).map((c: any) => ({
+          ...c,
+          days: typeof c.days === 'string' ? JSON.parse(c.days) : (c.days || [1, 2, 3, 4, 5]),
+          assignedEmployeeIds: typeof c.assignedEmployeeIds === 'string' ? JSON.parse(c.assignedEmployeeIds) : (c.assignedEmployeeIds || []),
+          memberDayMap: typeof c.memberDayMap === 'string' ? JSON.parse(c.memberDayMap) : (c.memberDayMap || {}),
+        }));
+        setTeamClients(parsedClients);
+      }
     } catch (err) {
       console.error('Failed to load schedule data:', err);
     }
@@ -895,6 +970,152 @@ export default function Home() {
     }
   };
 
+  // Client Management Handlers
+  const openClientEditor = (client?: ClientData | null) => {
+    setClientDropdownOpen(false);
+    if (client) {
+      setSelectedClientId(client.id);
+      setClientForm({
+        id: client.id,
+        name: client.name,
+        color: client.color || 'PINK',
+        location: client.location || client.name,
+        startTime: client.startTime || '08:30',
+        endTime: client.endTime || '17:00',
+        frequency: client.frequency || 'EVERY_OTHER_WEEK',
+        weekParity: (client.weekParity as any) || 'ODD',
+        monthlyWeek: client.monthlyWeek || 1,
+        days: Array.isArray(client.days) ? client.days : [3],
+        assignedEmployeeIds: Array.isArray(client.assignedEmployeeIds) ? client.assignedEmployeeIds : [],
+        memberDayMap: client.memberDayMap || {},
+        requiredMembersPerDay: client.requiredMembersPerDay || 1,
+        notes: client.notes || '',
+        isActive: client.isActive !== false,
+      });
+    } else {
+      setSelectedClientId(null);
+      setClientForm({
+        name: '',
+        color: 'PINK',
+        location: '',
+        startTime: '08:30',
+        endTime: '17:00',
+        frequency: 'EVERY_OTHER_WEEK',
+        weekParity: 'ODD',
+        monthlyWeek: 1,
+        days: [3],
+        assignedEmployeeIds: [],
+        memberDayMap: {},
+        requiredMembersPerDay: 1,
+        notes: '',
+        isActive: true,
+      });
+    }
+    setClientModalOpen(true);
+  };
+
+  const saveClientForm = async () => {
+    if (!clientForm.name.trim()) {
+      showToast('Client name is required', 'error');
+      return;
+    }
+    const teamId = selectedTeamId || currentTeam?.id;
+    if (!teamId) {
+      showToast('Please select a team first', 'error');
+      return;
+    }
+
+    try {
+      const isEdit = Boolean(selectedClientId);
+      const url = '/api/clients';
+      const method = isEdit ? 'PUT' : 'POST';
+      const payload = {
+        ...(isEdit ? { id: selectedClientId } : { teamId }),
+        name: clientForm.name.trim(),
+        color: clientForm.color,
+        location: clientForm.location.trim() || clientForm.name.trim(),
+        startTime: clientForm.startTime,
+        endTime: clientForm.endTime,
+        frequency: clientForm.frequency,
+        weekParity: clientForm.weekParity,
+        monthlyWeek: clientForm.monthlyWeek,
+        days: clientForm.days,
+        assignedEmployeeIds: clientForm.assignedEmployeeIds,
+        memberDayMap: clientForm.memberDayMap,
+        requiredMembersPerDay: clientForm.requiredMembersPerDay,
+        notes: clientForm.notes.trim() || null,
+        isActive: clientForm.isActive,
+      };
+
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (res.ok) {
+        showToast(isEdit ? `Updated client "${clientForm.name}"` : `Created client "${clientForm.name}"`);
+        await loadData();
+        const data = await res.json();
+        if (data.client?.id) {
+          setSelectedClientId(data.client.id);
+        }
+      } else {
+        const data = await res.json().catch(() => ({}));
+        showToast(data.error || 'Failed to save client', 'error');
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Error saving client', 'error');
+    }
+  };
+
+  const deleteClient = async (id: string, name: string) => {
+    if (!confirm(`Are you sure you want to delete client "${name}"?`)) return;
+    try {
+      const res = await fetch(`/api/clients?id=${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        showToast(`Deleted client "${name}"`);
+        await loadData();
+        setSelectedClientId(null);
+        setClientModalOpen(false);
+      } else {
+        showToast('Failed to delete client', 'error');
+      }
+    } catch {
+      showToast('Error deleting client', 'error');
+    }
+  };
+
+  const applyClientToSchedule = async (clientId?: string) => {
+    const teamId = selectedTeamId || currentTeam?.id;
+    if (!teamId) return;
+    setApplyingClient(true);
+    try {
+      const res = await fetch('/api/clients/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          teamId,
+          clientId,
+          weekStartDate: start.toISOString(),
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        showToast(`Applied ${data.appliedCount} client shift(s) for Week ${data.isoWeek}!`);
+        await loadData();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        showToast(data.error || 'Failed to apply client shifts', 'error');
+      }
+    } catch {
+      showToast('Error applying client shifts', 'error');
+    } finally {
+      setApplyingClient(false);
+    }
+  };
+
   // Add Member
   const addEmployee = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1007,6 +1228,8 @@ export default function Home() {
       datesToSave.push(date);
     }
 
+    const cleanNotes = notes?.trim() ? notes.trim() : null;
+
     // Optimistic UI Update
     setShifts((prev) => {
       const next = [...prev];
@@ -1021,7 +1244,7 @@ export default function Home() {
             isManual: true,
             customStart,
             customEnd,
-            notes,
+            notes: cleanNotes,
             color,
           };
           const idx = next.findIndex(s => s.employeeId === empId && isSameDay(new Date(s.date), sDate));
@@ -1050,7 +1273,7 @@ export default function Home() {
               isManual: true,
               customStart: type === 'CUSTOM' ? customStart : '',
               customEnd: type === 'CUSTOM' ? customEnd : '',
-              notes,
+              notes: cleanNotes,
               color: type === 'CUSTOM' ? color : '',
             }),
           })
@@ -1711,6 +1934,101 @@ export default function Home() {
                       <Settings size={15} /> Team Settings
                     </span>
                   </button>
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* Client Selector Pill */}
+          <div className="client-switcher">
+            <button
+              className="client-pill"
+              onClick={() => setClientDropdownOpen(!clientDropdownOpen)}
+              title="Select a client or manage customer assignments"
+            >
+              <Building2 size={16} style={{ color: 'var(--accent)' }} />
+              <span>Clients ({teamClients.length})</span>
+              <ChevronDown size={14} style={{ opacity: 0.7 }} />
+            </button>
+
+            {clientDropdownOpen && (
+              <>
+                <div
+                  className="dropdown-backdrop"
+                  onClick={() => setClientDropdownOpen(false)}
+                />
+                <div className="client-dropdown">
+                  <div style={{ padding: '0.4rem 0.6rem', fontSize: '0.75rem', fontWeight: 700, color: 'var(--slate-400)', textTransform: 'uppercase', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span>Clients for {currentTeam?.name || 'Team'}</span>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--slate-500)' }}>{teamClients.length} Configured</span>
+                  </div>
+
+                  {teamClients.length === 0 ? (
+                    <div style={{ padding: '0.85rem 0.6rem', textAlign: 'center', color: 'var(--slate-400)', fontSize: '0.82rem' }}>
+                      No clients configured yet for this team.
+                    </div>
+                  ) : (
+                    teamClients.map(c => {
+                      const dayLabels = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+                      const daysText = c.days?.map((d: number) => dayLabels[d]).join(', ');
+                      let freqText = 'Every week';
+                      if (c.frequency === 'EVERY_OTHER_WEEK') {
+                        freqText = `Every other week (${c.weekParity === 'EVEN' ? 'Even' : 'Odd'})`;
+                      } else if (c.frequency === 'EVERY_MONTH') {
+                        freqText = `Monthly (Wk ${c.monthlyWeek || 1})`;
+                      }
+
+                      return (
+                        <button
+                          key={c.id}
+                          className="client-option-item"
+                          onClick={() => openClientEditor(c)}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0 }}>
+                            <div
+                              style={{
+                                width: 8,
+                                height: 8,
+                                borderRadius: '50%',
+                                flexShrink: 0,
+                                background: c.color === 'GREEN' ? '#10b981' : c.color === 'BLUE' ? '#3b82f6' : c.color === 'PURPLE' ? '#a855f7' : c.color === 'ORANGE' ? '#f97316' : '#ec4899',
+                              }}
+                            />
+                            <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                              <span style={{ fontWeight: 600, color: 'white', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {c.name}
+                              </span>
+                              <span style={{ fontSize: '0.72rem', color: 'var(--slate-400)' }}>
+                                {freqText} • {daysText || 'No days'}
+                              </span>
+                            </div>
+                          </div>
+                          <span style={{ fontSize: '0.72rem', background: 'rgba(255,255,255,0.08)', padding: '0.15rem 0.4rem', borderRadius: 4, color: 'var(--slate-300)', whiteSpace: 'nowrap' }}>
+                            {c.assignedEmployeeIds?.length || 0} mbrs
+                          </span>
+                        </button>
+                      );
+                    })
+                  )}
+
+                  <div className="team-dropdown-divider" />
+                  <button
+                    className="team-add-btn"
+                    onClick={() => openClientEditor(null)}
+                  >
+                    <Plus size={16} /> Add New Client
+                  </button>
+                  {teamClients.length > 0 && (
+                    <button
+                      className="team-option"
+                      style={{ color: 'var(--accent)', marginTop: '0.2rem' }}
+                      onClick={() => openClientEditor(teamClients[0])}
+                    >
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <Sliders size={15} /> Open Clients Screen
+                      </span>
+                    </button>
+                  )}
                 </div>
               </>
             )}
@@ -2415,6 +2733,674 @@ export default function Home() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* FULL-SCREEN CLIENT MANAGER & EDITOR */}
+      {clientModalOpen && (
+        <div className="client-fullscreen-screen">
+          {/* Header Bar */}
+          <div className="client-screen-header">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+              <button
+                className="btn btn-secondary"
+                onClick={() => setClientModalOpen(false)}
+                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.45rem 0.85rem' }}
+              >
+                <ArrowLeft size={16} /> Back to Shifts Schedule
+              </button>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <div
+                  style={{
+                    width: 32,
+                    height: 32,
+                    borderRadius: 'var(--radius-lg)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    background: clientForm.color === 'GREEN' ? 'rgba(16, 185, 129, 0.2)' : clientForm.color === 'BLUE' ? 'rgba(59, 130, 246, 0.2)' : clientForm.color === 'PURPLE' ? 'rgba(168, 85, 247, 0.2)' : clientForm.color === 'ORANGE' ? 'rgba(249, 115, 22, 0.2)' : 'rgba(236, 72, 153, 0.2)',
+                    color: clientForm.color === 'GREEN' ? '#34d399' : clientForm.color === 'BLUE' ? '#60a5fa' : clientForm.color === 'PURPLE' ? '#c084fc' : clientForm.color === 'ORANGE' ? '#fb923c' : '#f472b6',
+                    border: '1px solid rgba(255,255,255,0.1)',
+                  }}
+                >
+                  <Building2 size={18} />
+                </div>
+                <div>
+                  <h1 style={{ fontSize: '1.25rem', fontWeight: 700, color: 'white', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    {selectedClientId ? clientForm.name || 'Edit Client' : 'New Client'}
+                    <span style={{ fontSize: '0.75rem', fontWeight: 600, padding: '0.2rem 0.5rem', borderRadius: 9999, background: 'rgba(99, 102, 241, 0.15)', color: '#a5b4fc', border: '1px solid rgba(99, 102, 241, 0.3)' }}>
+                      Team: {currentTeam?.name}
+                    </span>
+                  </h1>
+                </div>
+              </div>
+
+              {/* Quick Switch Client Dropdown */}
+              {teamClients.length > 0 && (
+                <div style={{ marginLeft: '1rem' }}>
+                  <select
+                    className="input"
+                    style={{ padding: '0.4rem 0.75rem', fontSize: '0.85rem', width: 'auto' }}
+                    value={selectedClientId || 'new'}
+                    onChange={e => {
+                      if (e.target.value === 'new') {
+                        openClientEditor(null);
+                      } else {
+                        const target = teamClients.find(c => c.id === e.target.value);
+                        if (target) openClientEditor(target);
+                      }
+                    }}
+                  >
+                    <option value="new">+ Add Another Client...</option>
+                    <optgroup label={`Clients in ${currentTeam?.name}`}>
+                      {teamClients.map(c => (
+                        <option key={c.id} value={c.id}>
+                          {c.name} ({c.frequency === 'EVERY_OTHER_WEEK' ? 'Bi-weekly' : c.frequency === 'EVERY_MONTH' ? 'Monthly' : 'Weekly'})
+                        </option>
+                      ))}
+                    </optgroup>
+                  </select>
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => applyClientToSchedule(selectedClientId || undefined)}
+                disabled={applyingClient || !selectedClientId}
+                title="Populate this client's shifts on the current week's schedule"
+                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+              >
+                <CalendarCheck size={16} />
+                {applyingClient ? 'Applying...' : 'Apply to Current Week'}
+              </button>
+
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={saveClientForm}
+                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+              >
+                <Check size={16} /> Save Client
+              </button>
+
+              {selectedClientId && (
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => deleteClient(selectedClientId, clientForm.name)}
+                  title="Delete this client"
+                  style={{ color: 'var(--danger)', padding: '0.5rem' }}
+                >
+                  <Trash2 size={16} />
+                </button>
+              )}
+
+              <button
+                type="button"
+                className="action-btn"
+                onClick={() => setClientModalOpen(false)}
+                title="Close"
+                style={{ marginLeft: '0.5rem' }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+          </div>
+
+          {/* Screen Body */}
+          <div className="client-screen-body">
+            <div className="client-grid-layout">
+              {/* LEFT COLUMN: Client Details & Recurrence */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                {/* Card 1: Client Identity & Appearance */}
+                <div className="client-card">
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <Building2 size={18} style={{ color: 'var(--accent)' }} />
+                      <h2 style={{ fontSize: '1rem', fontWeight: 700, color: 'white' }}>Client Identity & Shift Setup</h2>
+                    </div>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem', color: 'var(--slate-300)', cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={clientForm.isActive}
+                        onChange={e => setClientForm({ ...clientForm, isActive: e.target.checked })}
+                      />
+                      Active for Auto-fill
+                    </label>
+                  </div>
+
+                  <div>
+                    <label className="label">Client Name *</label>
+                    <input
+                      type="text"
+                      className="input"
+                      placeholder="e.g. MWT, Acme Corp, Client X, Project Site"
+                      value={clientForm.name}
+                      onChange={e => setClientForm({ ...clientForm, name: e.target.value })}
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="label">Location Label (Displayed in Shift Card Badge)</label>
+                    <input
+                      type="text"
+                      className="input"
+                      placeholder="e.g. MWT (Client Site) - leave empty to use Client Name"
+                      value={clientForm.location}
+                      onChange={e => setClientForm({ ...clientForm, location: e.target.value })}
+                    />
+                  </div>
+
+                  {/* Theme Color Selector */}
+                  <div>
+                    <label className="label">Shift Color (MS Teams Theme)</label>
+                    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                      {[
+                        { code: 'PINK', label: 'Pink', bg: 'rgba(236, 72, 153, 0.25)', border: '#ec4899' },
+                        { code: 'PURPLE', label: 'Purple', bg: 'rgba(168, 85, 247, 0.25)', border: '#a855f7' },
+                        { code: 'BLUE', label: 'Blue', bg: 'rgba(59, 130, 246, 0.25)', border: '#3b82f6' },
+                        { code: 'GREEN', label: 'Green', bg: 'rgba(16, 185, 129, 0.25)', border: '#10b981' },
+                        { code: 'ORANGE', label: 'Orange', bg: 'rgba(249, 115, 22, 0.25)', border: '#f97316' },
+                        { code: 'TEAL', label: 'Teal', bg: 'rgba(20, 184, 166, 0.25)', border: '#14b8a6' },
+                      ].map(c => (
+                        <button
+                          key={c.code}
+                          type="button"
+                          onClick={() => setClientForm({ ...clientForm, color: c.code })}
+                          style={{
+                            padding: '0.4rem 0.85rem',
+                            borderRadius: 'var(--radius)',
+                            background: clientForm.color === c.code ? c.bg : 'var(--slate-800)',
+                            border: `2px solid ${clientForm.color === c.code ? c.border : 'var(--slate-700)'}`,
+                            color: clientForm.color === c.code ? 'white' : 'var(--slate-300)',
+                            fontWeight: 600,
+                            fontSize: '0.8rem',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.4rem',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          <div style={{ width: 8, height: 8, borderRadius: '50%', background: c.border }} />
+                          {c.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Shift Timing */}
+                  <div>
+                    <label className="label">Shift Hours (Start & End Time)</label>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                      <div>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--slate-400)' }}>Start Time</span>
+                        <input
+                          type="time"
+                          className="input"
+                          value={clientForm.startTime}
+                          onChange={e => setClientForm({ ...clientForm, startTime: e.target.value })}
+                        />
+                      </div>
+                      <div>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--slate-400)' }}>End Time</span>
+                        <input
+                          type="time"
+                          className="input"
+                          value={clientForm.endTime}
+                          onChange={e => setClientForm({ ...clientForm, endTime: e.target.value })}
+                        />
+                      </div>
+                    </div>
+                    {/* Quick Presets */}
+                    <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.5rem' }}>
+                      {[
+                        { s: '07:30', e: '16:00', label: 'Early (07:30 - 16:00)' },
+                        { s: '08:30', e: '17:00', label: 'Standard (08:30 - 17:00)' },
+                        { s: '09:30', e: '18:00', label: 'Late (09:30 - 18:00)' },
+                      ].map(p => (
+                        <button
+                          key={p.label}
+                          type="button"
+                          onClick={() => setClientForm({ ...clientForm, startTime: p.s, endTime: p.e })}
+                          style={{
+                            padding: '0.2rem 0.5rem',
+                            fontSize: '0.72rem',
+                            borderRadius: 'var(--radius-xs)',
+                            background: 'var(--slate-800)',
+                            color: 'var(--slate-300)',
+                            border: '1px solid var(--slate-700)',
+                          }}
+                        >
+                          {p.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="label">Custom Shift Notes (Optional - left blank by default)</label>
+                    <input
+                      type="text"
+                      className="input"
+                      placeholder="e.g. On-call, Standby (leave empty for no note)"
+                      value={clientForm.notes}
+                      onChange={e => setClientForm({ ...clientForm, notes: e.target.value })}
+                    />
+                  </div>
+                </div>
+
+                {/* Card 2: Recurrence Pattern & Days of Week */}
+                <div className="client-card">
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <CalendarDays size={18} style={{ color: 'var(--primary)' }} />
+                    <h2 style={{ fontSize: '1rem', fontWeight: 700, color: 'white' }}>Recurrence Schedule & Frequency</h2>
+                  </div>
+
+                  {/* Frequency Buttons */}
+                  <div>
+                    <label className="label">How often does this client require coverage?</label>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.5rem' }}>
+                      {[
+                        { id: 'EVERY_WEEK', label: 'Every Week', desc: 'Weekly recurrence' },
+                        { id: 'EVERY_OTHER_WEEK', label: 'Every Other Week', desc: 'Bi-weekly (2-week cycle)' },
+                        { id: 'EVERY_MONTH', label: 'Every Month', desc: 'Monthly recurrence' },
+                      ].map(f => (
+                        <button
+                          key={f.id}
+                          type="button"
+                          onClick={() => setClientForm({ ...clientForm, frequency: f.id as any })}
+                          style={{
+                            padding: '0.75rem 0.6rem',
+                            borderRadius: 'var(--radius)',
+                            background: clientForm.frequency === f.id ? 'rgba(99, 102, 241, 0.2)' : 'var(--slate-800)',
+                            border: `2px solid ${clientForm.frequency === f.id ? 'var(--primary)' : 'var(--slate-700)'}`,
+                            color: clientForm.frequency === f.id ? 'white' : 'var(--slate-300)',
+                            textAlign: 'center',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          <div style={{ fontWeight: 700, fontSize: '0.85rem' }}>{f.label}</div>
+                          <div style={{ fontSize: '0.72rem', color: 'var(--slate-400)', marginTop: 2 }}>{f.desc}</div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Bi-weekly (Every other week) Parity Options */}
+                  {clientForm.frequency === 'EVERY_OTHER_WEEK' && (
+                    <div style={{ background: 'rgba(15, 23, 42, 0.7)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '1rem' }}>
+                      <label className="label" style={{ marginBottom: '0.5rem' }}>Bi-Weekly Cycle (ISO Week Parity)</label>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
+                        <button
+                          type="button"
+                          onClick={() => setClientForm({ ...clientForm, weekParity: 'ODD' })}
+                          style={{
+                            padding: '0.55rem',
+                            borderRadius: 'var(--radius-sm)',
+                            background: clientForm.weekParity === 'ODD' ? 'rgba(16, 185, 129, 0.2)' : 'var(--slate-800)',
+                            border: `1.5px solid ${clientForm.weekParity === 'ODD' ? '#10b981' : 'var(--slate-700)'}`,
+                            color: clientForm.weekParity === 'ODD' ? 'white' : 'var(--slate-400)',
+                            fontWeight: 600,
+                            fontSize: '0.82rem',
+                          }}
+                        >
+                          Odd Weeks (1, 3, 5, 7, 9...)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setClientForm({ ...clientForm, weekParity: 'EVEN' })}
+                          style={{
+                            padding: '0.55rem',
+                            borderRadius: 'var(--radius-sm)',
+                            background: clientForm.weekParity === 'EVEN' ? 'rgba(16, 185, 129, 0.2)' : 'var(--slate-800)',
+                            border: `1.5px solid ${clientForm.weekParity === 'EVEN' ? '#10b981' : 'var(--slate-700)'}`,
+                            color: clientForm.weekParity === 'EVEN' ? 'white' : 'var(--slate-400)',
+                            fontWeight: 600,
+                            fontSize: '0.82rem',
+                          }}
+                        >
+                          Even Weeks (2, 4, 6, 8, 10...)
+                        </button>
+                      </div>
+
+                      {/* Current Week Status Banner */}
+                      {(() => {
+                        const curWk = getISOWeek(start);
+                        const isCurActive = (clientForm.weekParity === 'ODD' && curWk % 2 === 1) || (clientForm.weekParity === 'EVEN' && curWk % 2 === 0);
+                        return (
+                          <div style={{ marginTop: '0.75rem', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-xs)', background: isCurActive ? 'rgba(16, 185, 129, 0.15)' : 'rgba(148, 163, 184, 0.1)', border: `1px solid ${isCurActive ? 'rgba(16, 185, 129, 0.3)' : 'rgba(148, 163, 184, 0.2)'}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.8rem' }}>
+                            <span style={{ color: isCurActive ? '#34d399' : '#94a3b8' }}>
+                              Current Week (ISO Week {curWk}) is:
+                            </span>
+                            <span style={{ fontWeight: 700, color: isCurActive ? '#34d399' : '#cbd5e1' }}>
+                              {isCurActive ? '✅ ACTIVE WEEK (Shift Will Trigger)' : '⏸️ OFF WEEK (No Shift Scheduled)'}
+                            </span>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
+
+                  {/* Monthly Week Options */}
+                  {clientForm.frequency === 'EVERY_MONTH' && (
+                    <div style={{ background: 'rgba(15, 23, 42, 0.7)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '1rem' }}>
+                      <label className="label">Which week of the month?</label>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.5rem' }}>
+                        {[1, 2, 3, 4].map(w => (
+                          <button
+                            key={w}
+                            type="button"
+                            onClick={() => setClientForm({ ...clientForm, monthlyWeek: w })}
+                            style={{
+                              padding: '0.55rem',
+                              borderRadius: 'var(--radius-sm)',
+                              background: clientForm.monthlyWeek === w ? 'rgba(99, 102, 241, 0.2)' : 'var(--slate-800)',
+                              border: `1.5px solid ${clientForm.monthlyWeek === w ? 'var(--primary)' : 'var(--slate-700)'}`,
+                              color: clientForm.monthlyWeek === w ? 'white' : 'var(--slate-400)',
+                              fontWeight: 600,
+                              fontSize: '0.82rem',
+                            }}
+                          >
+                            Week {w}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Days of Week Selector (Mon - Fri) */}
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.4rem' }}>
+                      <label className="label" style={{ margin: 0 }}>Required Days of the Week (Mon - Fri)</label>
+                      <div style={{ display: 'flex', gap: '0.4rem' }}>
+                        <button
+                          type="button"
+                          onClick={() => setClientForm({ ...clientForm, days: [3] })}
+                          style={{ fontSize: '0.72rem', color: 'var(--primary)', background: 'none' }}
+                        >
+                          Wed only
+                        </button>
+                        <span style={{ color: 'var(--slate-600)' }}>•</span>
+                        <button
+                          type="button"
+                          onClick={() => setClientForm({ ...clientForm, days: [1, 2, 3, 4, 5] })}
+                          style={{ fontSize: '0.72rem', color: 'var(--primary)', background: 'none' }}
+                        >
+                          All Weekdays
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="day-pills-row">
+                      {[
+                        { day: 1, name: 'Monday', short: 'Mon' },
+                        { day: 2, name: 'Tuesday', short: 'Tue' },
+                        { day: 3, name: 'Wednesday', short: 'Wed' },
+                        { day: 4, name: 'Thursday', short: 'Thu' },
+                        { day: 5, name: 'Friday', short: 'Fri' },
+                      ].map(d => {
+                        const isSelected = clientForm.days.includes(d.day);
+                        return (
+                          <button
+                            key={d.day}
+                            type="button"
+                            className={`day-pill-btn ${isSelected ? 'active' : ''}`}
+                            onClick={() => {
+                              const nextDays = isSelected
+                                ? clientForm.days.filter(x => x !== d.day)
+                                : [...clientForm.days, d.day].sort();
+                              setClientForm({ ...clientForm, days: nextDays });
+                            }}
+                          >
+                            {d.short}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {clientForm.days.length === 0 && (
+                      <div style={{ fontSize: '0.75rem', color: '#f87171', marginTop: '0.4rem' }}>
+                        Please select at least one day for this client.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* RIGHT COLUMN: Assigned Members & Forecast */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                {/* Card 3: Assigned Members */}
+                <div className="client-card">
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <Users size={18} style={{ color: 'var(--accent)' }} />
+                      <h2 style={{ fontSize: '1rem', fontWeight: 700, color: 'white' }}>
+                        Assigned Team Members ({clientForm.assignedEmployeeIds.length}/{employees.length})
+                      </h2>
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.4rem' }}>
+                      <button
+                        type="button"
+                        onClick={() => setClientForm({ ...clientForm, assignedEmployeeIds: employees.map(e => e.id) })}
+                        style={{ fontSize: '0.72rem', color: 'var(--primary)', background: 'none' }}
+                      >
+                        Select All
+                      </button>
+                      <span style={{ color: 'var(--slate-600)' }}>•</span>
+                      <button
+                        type="button"
+                        onClick={() => setClientForm({ ...clientForm, assignedEmployeeIds: [] })}
+                        style={{ fontSize: '0.72rem', color: 'var(--slate-400)', background: 'none' }}
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  </div>
+
+                  <div style={{ fontSize: '0.8rem', color: 'var(--slate-400)' }}>
+                    Only checked team members will be scheduled for this client.
+                  </div>
+
+                  {/* Search box if > 4 members */}
+                  {employees.length > 4 && (
+                    <input
+                      type="text"
+                      className="input"
+                      placeholder="Filter team members..."
+                      value={clientMemberSearch}
+                      onChange={e => setClientMemberSearch(e.target.value)}
+                      style={{ padding: '0.4rem 0.75rem', fontSize: '0.82rem' }}
+                    />
+                  )}
+
+                  {/* Members list */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: 260, overflowY: 'auto' }}>
+                    {employees
+                      .filter(emp => !clientMemberSearch || emp.name.toLowerCase().includes(clientMemberSearch.toLowerCase()))
+                      .map(emp => {
+                        const isAssigned = clientForm.assignedEmployeeIds.includes(emp.id);
+                        return (
+                          <div
+                            key={emp.id}
+                            className={`member-assign-item ${isAssigned ? 'selected' : ''}`}
+                            onClick={() => {
+                              const next = isAssigned
+                                ? clientForm.assignedEmployeeIds.filter(id => id !== emp.id)
+                                : [...clientForm.assignedEmployeeIds, emp.id];
+                              setClientForm({ ...clientForm, assignedEmployeeIds: next });
+                            }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                              <input
+                                type="checkbox"
+                                checked={isAssigned}
+                                onChange={() => {}}
+                                style={{ accentColor: 'var(--primary)', cursor: 'pointer' }}
+                              />
+                              <div
+                                style={{
+                                  width: 26,
+                                  height: 26,
+                                  borderRadius: '50%',
+                                  background: 'linear-gradient(135deg, #6366f1, #a855f7)',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  fontWeight: 700,
+                                  fontSize: '0.75rem',
+                                  color: 'white',
+                                }}
+                              >
+                                {emp.name.charAt(0).toUpperCase()}
+                              </div>
+                              <div>
+                                <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'white' }}>{emp.name}</div>
+                                {emp.email && <div style={{ fontSize: '0.7rem', color: 'var(--slate-400)' }}>{emp.email}</div>}
+                              </div>
+                            </div>
+                            <span style={{ fontSize: '0.72rem', color: 'var(--slate-400)', background: 'rgba(255,255,255,0.06)', padding: '0.15rem 0.4rem', borderRadius: 4 }}>
+                              {emp.group || 'Member'}
+                            </span>
+                          </div>
+                        );
+                      })}
+                  </div>
+                </div>
+
+                {/* Card 4: Day-by-Day Specific Member Designation */}
+                {clientForm.days.length > 0 && clientForm.assignedEmployeeIds.length > 0 && (
+                  <div className="client-card">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <CalendarCheck size={18} style={{ color: 'var(--success)' }} />
+                      <h2 style={{ fontSize: '1rem', fontWeight: 700, color: 'white' }}>Day-by-Day Assignment Rules</h2>
+                    </div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--slate-400)' }}>
+                      Designate a specific assigned person for each day, or choose Auto-Assign from the assigned pool:
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                      {clientForm.days.map(d => {
+                        const dayNames = ['', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+                        const selectedEmpId = clientForm.memberDayMap[d.toString()] || '';
+                        return (
+                          <div
+                            key={d}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              gap: '0.75rem',
+                              padding: '0.5rem 0.75rem',
+                              background: 'rgba(15, 23, 42, 0.6)',
+                              borderRadius: 'var(--radius)',
+                              border: '1px solid var(--border)',
+                            }}
+                          >
+                            <span style={{ fontWeight: 600, fontSize: '0.85rem', color: 'white', minWidth: 90 }}>
+                              {dayNames[d]}
+                            </span>
+                            <select
+                              className="input"
+                              style={{ flex: 1, padding: '0.35rem 0.6rem', fontSize: '0.82rem' }}
+                              value={selectedEmpId}
+                              onChange={e => {
+                                const nextMap = { ...clientForm.memberDayMap };
+                                if (e.target.value) {
+                                  nextMap[d.toString()] = e.target.value;
+                                } else {
+                                  delete nextMap[d.toString()];
+                                }
+                                setClientForm({ ...clientForm, memberDayMap: nextMap });
+                              }}
+                            >
+                              <option value="">Any available assigned member (Auto-assign / rotate)</option>
+                              {clientForm.assignedEmployeeIds.map(empId => {
+                                const emp = employees.find(e => e.id === empId);
+                                if (!emp) return null;
+                                return (
+                                  <option key={emp.id} value={emp.id}>
+                                    Designate: {emp.name}
+                                  </option>
+                                );
+                              })}
+                            </select>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Card 5: Live 6-Week Forecast Preview */}
+                <div className="client-card">
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <Repeat size={18} style={{ color: 'var(--accent)' }} />
+                    <h2 style={{ fontSize: '1rem', fontWeight: 700, color: 'white' }}>Live 6-Week Recurrence Forecast</h2>
+                  </div>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--slate-400)' }}>
+                    Visual projection verifying how this client will be scheduled across upcoming weeks:
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                    {[0, 1, 2, 3, 4, 5].map(i => {
+                      const weekDate = addWeeks(start, i);
+                      const wkNum = getISOWeek(weekDate);
+                      const mNum = getWeekOfMonth(weekDate);
+                      let isWkActive = false;
+
+                      if (clientForm.frequency === 'EVERY_WEEK') {
+                        isWkActive = true;
+                      } else if (clientForm.frequency === 'EVERY_OTHER_WEEK') {
+                        if (clientForm.weekParity === 'ODD') isWkActive = wkNum % 2 === 1;
+                        else if (clientForm.weekParity === 'EVEN') isWkActive = wkNum % 2 === 0;
+                        else isWkActive = wkNum % 2 === 0;
+                      } else if (clientForm.frequency === 'EVERY_MONTH') {
+                        isWkActive = mNum === (clientForm.monthlyWeek || 1);
+                      }
+
+                      const dayLabels = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+                      const activeDaysText = clientForm.days.map(d => dayLabels[d]).join(', ');
+
+                      return (
+                        <div key={i} className={`forecast-week-card ${isWkActive ? 'active-week' : ''}`}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                            <div style={{ fontWeight: 700, fontSize: '0.85rem', color: isWkActive ? '#34d399' : 'var(--slate-400)', minWidth: 65 }}>
+                              Week {wkNum}
+                            </div>
+                            <div>
+                              <div style={{ fontSize: '0.78rem', color: 'white', fontWeight: 500 }}>
+                                {format(weekDate, 'MMM d')} – {format(addDays(weekDate, 4), 'MMM d, yyyy')}
+                              </div>
+                              <div style={{ fontSize: '0.72rem', color: isWkActive ? '#a7f3d0' : 'var(--slate-500)' }}>
+                                {isWkActive ? `Scheduled on: ${activeDaysText || 'None'}` : 'No client shift scheduled (Off week)'}
+                              </div>
+                            </div>
+                          </div>
+                          <span
+                            style={{
+                              fontSize: '0.7rem',
+                              fontWeight: 700,
+                              padding: '0.2rem 0.5rem',
+                              borderRadius: 9999,
+                              background: isWkActive ? 'rgba(16, 185, 129, 0.25)' : 'rgba(100, 116, 139, 0.2)',
+                              color: isWkActive ? '#34d399' : 'var(--slate-400)',
+                              border: `1px solid ${isWkActive ? 'rgba(16, 185, 129, 0.4)' : 'rgba(100, 116, 139, 0.3)'}`,
+                            }}
+                          >
+                            {isWkActive ? 'ACTIVE' : 'OFF'}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       )}

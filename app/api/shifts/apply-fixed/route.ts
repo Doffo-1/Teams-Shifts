@@ -59,21 +59,21 @@ export async function POST(req: Request) {
             if (dayConfig.type === 'OFF') {
               type = 'OFF';
               location = 'HOME';
-              notes = notes || 'Fixed day off';
+              notes = notes || null;
             } else if (dayConfig.type === 'OFFICE') {
               type = dayConfig.shiftType && dayConfig.shiftType !== 'AUTO' ? dayConfig.shiftType : 'EARLY';
               location = 'OFFICE';
-              notes = notes || 'Fixed office';
+              notes = notes || null;
             } else if (dayConfig.type === 'HOME') {
               type = dayConfig.shiftType && dayConfig.shiftType !== 'AUTO' ? dayConfig.shiftType : 'EARLY';
               location = 'HOME';
-              notes = notes || 'Fixed home';
+              notes = notes || null;
             } else if (dayConfig.type === 'CUSTOM') {
               type = 'CUSTOM';
               location = dayConfig.location || 'OFFICE';
               customStart = dayConfig.start || '08:30';
               customEnd = dayConfig.end || '17:00';
-              notes = notes || 'Fixed custom';
+              notes = notes || null;
             }
 
             await tx.shift.upsert({
@@ -122,7 +122,7 @@ export async function POST(req: Request) {
                   type: 'OFF',
                   location: 'HOME',
                   isManual: true,
-                  notes: 'Fixed day off',
+                  notes: null,
                 },
                 create: {
                   employeeId: emp.id,
@@ -130,7 +130,7 @@ export async function POST(req: Request) {
                   type: 'OFF',
                   location: 'HOME',
                   isManual: true,
-                  notes: 'Fixed day off',
+                  notes: null,
                 },
               });
               appliedCount++;

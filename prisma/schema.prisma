@@ -22,6 +22,7 @@ model Team {
   rule            TeamRule?
   employees       Employee[]
   shiftTypes      ShiftTypeConfig[]
+  clients         Client[]
 }
 
 model TeamRule {
@@ -109,4 +110,28 @@ model Shift {
   updatedAt   DateTime  @updatedAt
 
   @@unique([employeeId, date])
+}
+
+model Client {
+  id                    String    @id @default(cuid())
+  teamId                String
+  team                  Team      @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  name                  String
+  color                 String?   @default("PINK")
+  location              String?
+  startTime             String?   @default("08:30")
+  endTime               String?   @default("17:00")
+  frequency             String    @default("EVERY_WEEK") // "EVERY_WEEK" | "EVERY_OTHER_WEEK" | "EVERY_MONTH"
+  weekParity            String?   @default("ALL") // "ALL" | "EVEN" | "ODD"
+  monthlyWeek           Int?
+  days                  String    @default("[1,2,3,4,5]") // JSON array of day numbers [1..5]
+  assignedEmployeeIds   String    @default("[]") // JSON array of Employee IDs
+  memberDayMap          String?   @default("{}") // JSON map of day to employeeId
+  requiredMembersPerDay Int       @default(1)
+  notes                 String?
+  isActive              Boolean   @default(true)
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([teamId])
 }

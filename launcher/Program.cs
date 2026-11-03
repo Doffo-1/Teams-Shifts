@@ -256,6 +256,7 @@ namespace TeamsShiftsLauncher
                 psi.EnvironmentVariables["NODE_ENV"] = "production";
                 psi.EnvironmentVariables["NEXT_TELEMETRY_DISABLED"] = "1";
                 psi.EnvironmentVariables["TZ"] = "Europe/Amsterdam";
+                psi.EnvironmentVariables["NODE_TLS_REJECT_UNAUTHORIZED"] = "0";
 
                 nodeProcess = new Process { StartInfo = psi, EnableRaisingEvents = true };
 

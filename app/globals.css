@@ -1585,3 +1585,199 @@ input[type="range"] {
   color: #cbd5e1;
 }
 
+/* Client Switcher & Dropdown */
+.client-switcher {
+  position: relative;
+  z-index: 60;
+}
+
+.client-pill {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.45rem 0.85rem;
+  background: rgba(30, 41, 59, 0.8);
+  border: 1px solid rgba(139, 92, 246, 0.4);
+  border-radius: var(--radius-lg);
+  color: var(--slate-200);
+  font-size: 0.875rem;
+  font-weight: 600;
+  transition: all 0.2s ease;
+}
+
+.client-pill:hover {
+  background: var(--slate-700);
+  border-color: var(--accent);
+  color: white;
+}
+
+.client-dropdown {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  left: 0;
+  width: 320px;
+  background: #0f172a;
+  border: 1px solid rgba(139, 92, 246, 0.4);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 20px 45px -5px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  z-index: 100;
+  padding: 0.5rem;
+  max-height: 440px;
+  overflow-y: auto;
+  animation: fadeIn 0.15s ease-out;
+}
+
+.client-option-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: var(--radius-sm);
+  color: var(--slate-200);
+  font-size: 0.85rem;
+  text-align: left;
+  transition: all 0.15s ease;
+  cursor: pointer;
+}
+
+.client-option-item:hover {
+  background: rgba(139, 92, 246, 0.18);
+  color: white;
+}
+
+/* Full-Screen Client Manager */
+.client-fullscreen-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  background: #090d16;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  animation: fadeIn 0.2s ease-out;
+}
+
+.client-screen-header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: rgba(15, 23, 42, 0.95);
+  backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--border);
+  padding: 1rem 1.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.client-screen-body {
+  flex: 1;
+  max-width: 1600px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 1.5rem 1.75rem 3rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.client-grid-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+}
+
+@media (max-width: 1024px) {
+  .client-grid-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.client-card {
+  background: rgba(19, 29, 51, 0.7);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  backdrop-filter: blur(8px);
+}
+
+.day-pills-row {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.day-pill-btn {
+  flex: 1;
+  min-width: 50px;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius);
+  background: var(--slate-800);
+  border: 1px solid var(--slate-600);
+  color: var(--slate-300);
+  font-weight: 700;
+  font-size: 0.85rem;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.day-pill-btn:hover {
+  background: var(--slate-700);
+  color: white;
+  border-color: var(--primary);
+}
+
+.day-pill-btn.active {
+  background: var(--primary);
+  color: white;
+  border-color: var(--primary);
+  box-shadow: 0 0 12px var(--primary-glow);
+}
+
+.member-assign-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius);
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(51, 65, 85, 0.4);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.member-assign-item:hover {
+  background: rgba(30, 41, 59, 0.8);
+  border-color: var(--slate-500);
+}
+
+.member-assign-item.selected {
+  background: rgba(99, 102, 241, 0.15);
+  border-color: rgba(99, 102, 241, 0.5);
+}
+
+.forecast-week-card {
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(51, 65, 85, 0.4);
+  border-radius: var(--radius);
+  padding: 0.75rem 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.forecast-week-card.active-week {
+  border-color: rgba(16, 185, 129, 0.5);
+  background: rgba(16, 185, 129, 0.08);
+}
+
+

@@ -69,7 +69,22 @@ export async function POST(req: Request) {
       color: s.color,
     }));
 
-    // Generate schedule using team's configured rules, applying fixed days upfront
+    // Fetch active clients for this team
+    let teamClients: any[] = [];
+    try {
+      teamClients = await (prisma as any).client.findMany({
+        where: { teamId: team.id, isActive: true },
+      });
+    } catch {
+      try {
+        teamClients = (await prisma.$queryRawUnsafe(
+          `SELECT * FROM "Client" WHERE "teamId" = ? AND "isActive" = 1`,
+          team.id
+        )) as any[];
+      } catch {}
+    }
+
+    // Generate schedule using team's configured rules, applying fixed days & client shifts upfront
     const result = generateWeeklySchedule(
       employees.map((e: any) => ({
         id: e.id,
@@ -98,7 +113,8 @@ export async function POST(req: Request) {
         workingDays: team.rule.workingDays,
         autoBalanceShiftTypes: team.rule.autoBalanceShiftTypes,
         autoBalanceLocations: team.rule.autoBalanceLocations,
-      } : undefined
+      } : undefined,
+      teamClients
     );
 
     // Save in transaction: delete previous non-manual shifts and upsert generated & fixed ones

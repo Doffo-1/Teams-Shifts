@@ -1,4 +1,4 @@
-import { addDays, startOfWeek, isSameDay, getDay, format } from 'date-fns';
+import { addDays, startOfWeek, isSameDay, getDay, format, getISOWeek, getWeekOfMonth } from 'date-fns';
 
 export type ShiftType = 'EARLY' | 'LATE' | 'OFF' | 'CUSTOM' | 'SICK' | 'VACATION' | string;
 export type LocationType = 'HOME' | 'OFFICE' | string;
@@ -14,6 +14,24 @@ export interface ShiftInput {
   customEnd?: string | null;
   notes?: string | null;
   color?: string | null;
+}
+
+export interface GeneratorClient {
+  id: string;
+  name: string;
+  color?: string | null;
+  location?: string | null;
+  startTime?: string | null;
+  endTime?: string | null;
+  frequency: string; // 'EVERY_WEEK' | 'EVERY_OTHER_WEEK' | 'EVERY_MONTH'
+  weekParity?: string | null; // 'ALL' | 'EVEN' | 'ODD'
+  monthlyWeek?: number | null;
+  days: string | number[];
+  assignedEmployeeIds: string | string[];
+  memberDayMap?: string | Record<string, string> | null;
+  requiredMembersPerDay?: number;
+  notes?: string | null;
+  isActive?: boolean;
 }
 
 export interface GeneratorEmployee {
@@ -61,7 +79,8 @@ export function generateWeeklySchedule(
   employees: GeneratorEmployee[],
   startDate: Date,
   existingShifts: ShiftInput[],
-  rules?: Partial<GeneratorRules>
+  rules?: Partial<GeneratorRules>,
+  clients?: GeneratorClient[]
 ): { shifts: ShiftInput[]; summary: GenerationSummary } {
   const start = startOfWeek(startDate, { weekStartsOn: 1 }); // Monday
 
@@ -136,7 +155,7 @@ export function generateWeeklySchedule(
             type: 'OFF',
             location: 'HOME',
             isManual: true,
-            notes: dayConfig.notes || 'Fixed day off',
+            notes: dayConfig.notes || null,
           });
           fixedAppliedCount++;
         } else if (dayConfig.type === 'OFFICE') {
@@ -147,7 +166,7 @@ export function generateWeeklySchedule(
             type: shiftType,
             location: 'OFFICE',
             isManual: true,
-            notes: dayConfig.notes || 'Fixed office',
+            notes: dayConfig.notes || null,
           });
           fixedAppliedCount++;
         } else if (dayConfig.type === 'HOME') {
@@ -158,7 +177,7 @@ export function generateWeeklySchedule(
             type: shiftType,
             location: 'HOME',
             isManual: true,
-            notes: dayConfig.notes || 'Fixed home',
+            notes: dayConfig.notes || null,
           });
           fixedAppliedCount++;
         } else if (dayConfig.type === 'CUSTOM') {
@@ -171,7 +190,7 @@ export function generateWeeklySchedule(
             customStart: dayConfig.start || '08:30',
             customEnd: dayConfig.end || '17:00',
             isManual: true,
-            notes: dayConfig.notes || 'Fixed custom',
+            notes: dayConfig.notes || null,
           });
           fixedAppliedCount++;
         }
@@ -193,10 +212,110 @@ export function generateWeeklySchedule(
             type: 'OFF',
             location: 'HOME',
             isManual: true,
-            notes: 'Fixed day off',
+            notes: null,
           });
           fixedAppliedCount++;
         }
+      }
+    }
+  }
+
+  // 2.5 APPLY RECURRING CLIENT SHIFTS (e.g. Wednesday every other week, etc.)
+  if (clients && clients.length > 0) {
+    const isoWeek = getISOWeek(start);
+    const monthWeek = getWeekOfMonth(start);
+
+    for (const client of clients) {
+      if (client.isActive === false) continue;
+
+      let isWeekActive = false;
+      const freq = client.frequency || 'EVERY_WEEK';
+      const parity = client.weekParity || 'ALL';
+
+      if (freq === 'EVERY_WEEK') {
+        isWeekActive = true;
+      } else if (freq === 'EVERY_OTHER_WEEK') {
+        if (parity === 'ODD') isWeekActive = isoWeek % 2 === 1;
+        else if (parity === 'EVEN') isWeekActive = isoWeek % 2 === 0;
+        else isWeekActive = isoWeek % 2 === 0;
+      } else if (freq === 'EVERY_MONTH') {
+        isWeekActive = monthWeek === (client.monthlyWeek || 1);
+      }
+
+      if (!isWeekActive) continue;
+
+      let activeDays: number[] = [1, 2, 3, 4, 5];
+      try {
+        if (typeof client.days === 'string') activeDays = JSON.parse(client.days);
+        else if (Array.isArray(client.days)) activeDays = client.days;
+      } catch {
+        activeDays = [1, 2, 3, 4, 5];
+      }
+
+      let assignedEmpIds: string[] = [];
+      try {
+        if (typeof client.assignedEmployeeIds === 'string') assignedEmpIds = JSON.parse(client.assignedEmployeeIds);
+        else if (Array.isArray(client.assignedEmployeeIds)) assignedEmpIds = client.assignedEmployeeIds;
+      } catch {
+        assignedEmpIds = [];
+      }
+
+      let memberDayMap: Record<string, string> = {};
+      try {
+        if (typeof client.memberDayMap === 'string') memberDayMap = JSON.parse(client.memberDayMap);
+        else if (client.memberDayMap && typeof client.memberDayMap === 'object') memberDayMap = client.memberDayMap;
+      } catch {
+        memberDayMap = {};
+      }
+
+      const assignedEmps = assignedEmpIds
+        .map(id => allActiveEmployees.find(e => e.id === id))
+        .filter(Boolean) as GeneratorEmployee[];
+
+      if (assignedEmps.length === 0) continue;
+
+      for (const dayNum of activeDays) {
+        if (!workingDaysArray.includes(dayNum)) continue;
+        const currentDate = addDays(start, dayNum - 1);
+
+        // Check if designated or available assigned employee exists
+        let targetEmp: GeneratorEmployee | undefined = undefined;
+        const designatedId = memberDayMap[dayNum.toString()] || memberDayMap[dayNum];
+        if (designatedId) {
+          targetEmp = assignedEmps.find(e => e.id === designatedId);
+        }
+
+        if (!targetEmp) {
+          // Find first assigned employee not already having a shift on this day
+          targetEmp = assignedEmps.find(emp => {
+            return !generatedShifts.some(
+              s => s.employeeId === emp.id && isSameDay(new Date(s.date), currentDate)
+            );
+          });
+        }
+
+        if (!targetEmp) {
+          targetEmp = assignedEmps[0];
+        }
+
+        // If targetEmp already has a shift on this day, don't overwrite
+        const alreadyHasShift = generatedShifts.some(
+          s => s.employeeId === targetEmp!.id && isSameDay(new Date(s.date), currentDate)
+        );
+        if (alreadyHasShift) continue;
+
+        generatedShifts.push({
+          employeeId: targetEmp.id,
+          date: currentDate,
+          type: 'CUSTOM',
+          location: client.location || client.name,
+          customStart: client.startTime || '08:30',
+          customEnd: client.endTime || '17:00',
+          color: client.color || 'PINK',
+          notes: client.notes || null,
+          isManual: true,
+        });
+        fixedAppliedCount++;
       }
     }
   }
