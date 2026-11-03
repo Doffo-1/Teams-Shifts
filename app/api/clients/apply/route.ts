@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { prisma, ensureDefaultData } from '@/lib/db';
-import { getISOWeek, getWeekOfMonth, startOfWeek, addDays, startOfDay, endOfDay } from 'date-fns';
+import { getISOWeek, getWeekOfMonth, startOfWeek, addDays, startOfDay, endOfDay, isSameDay } from 'date-fns';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,6 +18,7 @@ export async function POST(request: Request) {
     const monday = startOfWeek(startDate, { weekStartsOn: 1 });
     const isoWeek = getISOWeek(monday);
     const monthWeek = getWeekOfMonth(monday);
+    const weekEnd = addDays(monday, 6);
 
     // Fetch clients
     let clients: any[] = [];
@@ -43,18 +44,72 @@ export async function POST(request: Request) {
       }
     }
 
-    // Fetch team employees
+    // Fetch team employees with office preferences & rules
     let employees: any[] = [];
     try {
       employees = await prisma.employee.findMany({
         where: { teamId, isActive: true },
-        select: { id: true, name: true, fixedOffDays: true, fixedDaySchedule: true },
+        select: { id: true, name: true, fixedOffDays: true, fixedDaySchedule: true, maxOfficeDays: true, allowedLocation: true },
       });
     } catch {
       employees = (await prisma.$queryRawUnsafe(
-        `SELECT "id", "name", "fixedOffDays", "fixedDaySchedule" FROM "Employee" WHERE "teamId" = ? AND "isActive" = 1`,
+        `SELECT "id", "name", "fixedOffDays", "fixedDaySchedule", "maxOfficeDays", "allowedLocation" FROM "Employee" WHERE "teamId" = ? AND "isActive" = 1`,
         teamId
       )) as any[];
+    }
+
+    // Fetch team rules for maxOfficeDaysPerWeek default
+    let defaultMaxOfficeDays = 3;
+    try {
+      const rule = await prisma.rule.findUnique({ where: { teamId } });
+      if (rule && rule.maxOfficeDaysPerWeek) defaultMaxOfficeDays = rule.maxOfficeDaysPerWeek;
+    } catch {
+      try {
+        const rules = (await prisma.$queryRawUnsafe(
+          `SELECT "maxOfficeDaysPerWeek" FROM "Rule" WHERE "teamId" = ? LIMIT 1`,
+          teamId
+        )) as any[];
+        if (rules.length > 0 && rules[0].maxOfficeDaysPerWeek) {
+          defaultMaxOfficeDays = rules[0].maxOfficeDaysPerWeek;
+        }
+      } catch {}
+    }
+
+    // Fetch all existing shifts for the week
+    let existingShifts: any[] = [];
+    try {
+      existingShifts = await prisma.shift.findMany({
+        where: {
+          employeeId: { in: employees.map(e => e.id) },
+          date: {
+            gte: startOfDay(monday),
+            lte: endOfDay(weekEnd),
+          },
+        },
+      });
+    } catch {
+      try {
+        existingShifts = (await prisma.$queryRawUnsafe(
+          `SELECT "id", "employeeId", "date", "type", "location" FROM "Shift"
+           WHERE "date" >= ? AND "date" <= ?`,
+          startOfDay(monday).toISOString(),
+          endOfDay(weekEnd).toISOString()
+        )) as any[];
+      } catch {}
+    }
+
+    // Running office days counter for fair accountability across the week
+    const empOfficeCountMap = new Map<string, number>();
+    for (const emp of employees) {
+      const count = existingShifts.filter(s =>
+        s.employeeId === emp.id &&
+        s.location !== 'HOME' &&
+        s.location !== 'Thuis' &&
+        s.type !== 'OFF' &&
+        s.type !== 'SICK' &&
+        s.type !== 'VACATION'
+      ).length;
+      empOfficeCountMap.set(emp.id, count);
     }
 
     const empMap = new Map<string, any>(employees.map(e => [e.id, e]));
@@ -126,6 +181,8 @@ export async function POST(request: Request) {
         dailyReqs = {};
       }
 
+      const isClientOffice = client.location !== 'HOME' && client.location !== 'Thuis';
+
       // 4. For each active day in the week
       for (const dayNum of activeDays) {
         if (dayNum < 1 || dayNum > 5) continue;
@@ -142,52 +199,101 @@ export async function POST(request: Request) {
 
         if (requiredForThisDay <= 0) continue;
 
-        const targetEmps: any[] = [];
+        // Check availability on this date
+        const isCandidateAvailable = (emp: any): boolean => {
+          // Check if employee already has OFF, SICK, or VACATION on this date
+          const existing = existingShifts.find(s =>
+            s.employeeId === emp.id &&
+            isSameDay(new Date(s.date), shiftDate)
+          );
+          if (existing && (existing.type === 'OFF' || existing.type === 'SICK' || existing.type === 'VACATION')) {
+            return false;
+          }
+          if (emp.fixedOffDays) {
+            try {
+              const offDays = JSON.parse(emp.fixedOffDays);
+              if (Array.isArray(offDays) && offDays.includes(dayNum)) return false;
+            } catch {}
+          }
+          if (emp.allowedLocation === 'HOME_ONLY' && isClientOffice) {
+            return false;
+          }
+          // Don't double book if already scheduled on another client today
+          if (appliedShifts.some(as => as.employeeId === emp.id && as.dayNum === dayNum)) {
+            return false;
+          }
+          return true;
+        };
 
-        // 4a. Check member-specific assigned days (e.g. memberDayMap[empId] = [1, 5])
+        // 4a. Gather candidate members configured for this day
+        let dayCandidates: any[] = [];
         for (const emp of validAssignedEmps) {
           const empDays = memberDayMap[emp.id];
           if (Array.isArray(empDays) && empDays.includes(dayNum)) {
-            targetEmps.push(emp);
+            dayCandidates.push(emp);
           }
         }
 
-        // 4b. Check day-keyed fallback
+        // 4b. Day-keyed fallback
         const dayConfig = memberDayMap[dayNum.toString()] || memberDayMap[dayNum];
         if (dayConfig) {
           if (Array.isArray(dayConfig)) {
             for (const id of dayConfig) {
               const emp = empMap.get(id);
-              if (emp && !targetEmps.some(te => te.id === emp.id)) {
-                targetEmps.push(emp);
+              if (emp && !dayCandidates.some(te => te.id === emp.id)) {
+                dayCandidates.push(emp);
               }
             }
           } else if (typeof dayConfig === 'string') {
             const emp = empMap.get(dayConfig);
-            if (emp && !targetEmps.some(te => te.id === emp.id)) {
-              targetEmps.push(emp);
+            if (emp && !dayCandidates.some(te => te.id === emp.id)) {
+              dayCandidates.push(emp);
             }
           }
         }
 
-        // 4c. Fill up to requiredForThisDay if needed
-        if (targetEmps.length === 0) {
-          for (const emp of validAssignedEmps) {
-            if (targetEmps.length >= requiredForThisDay) break;
-            if (!targetEmps.some(te => te.id === emp.id)) {
-              targetEmps.push(emp);
-            }
-          }
-        } else if (targetEmps.length < requiredForThisDay) {
-          for (const emp of validAssignedEmps) {
-            if (targetEmps.length >= requiredForThisDay) break;
-            if (!targetEmps.some(te => te.id === emp.id)) {
-              targetEmps.push(emp);
-            }
+        // 4c. If nobody has this day explicitly set, all assigned are candidates
+        if (dayCandidates.length === 0) {
+          dayCandidates = [...validAssignedEmps];
+        }
+
+        let availableCandidates = dayCandidates.filter(isCandidateAvailable);
+        if (availableCandidates.length === 0) {
+          availableCandidates = validAssignedEmps.filter(isCandidateAvailable);
+        }
+
+        // 4d. Randomize candidates so order of who was added first does NOT dictate selection
+        const shuffled = [...availableCandidates].sort(() => Math.random() - 0.5);
+
+        // 4e. Hold maximum office days accountable
+        const underLimit: any[] = [];
+        const atLimit: any[] = [];
+
+        for (const emp of shuffled) {
+          const maxOffice = emp.maxOfficeDays ?? defaultMaxOfficeDays;
+          const currentOffice = empOfficeCountMap.get(emp.id) || 0;
+          if (isClientOffice && currentOffice >= maxOffice) {
+            atLimit.push(emp);
+          } else {
+            underLimit.push(emp);
           }
         }
 
-        // 4d. For each targetEmp, delete any existing shift on that day first, then create client shift
+        // Sort underLimit by office days ascending for fair weekly balance
+        underLimit.sort((a, b) => (empOfficeCountMap.get(a.id) || 0) - (empOfficeCountMap.get(b.id) || 0));
+
+        const orderedCandidates = [...underLimit, ...atLimit];
+
+        // 4f. Select STRICTLY up to requiredForThisDay (never schedule all candidates when client only needs N)
+        const targetEmps: any[] = [];
+        for (const emp of orderedCandidates) {
+          if (targetEmps.length >= requiredForThisDay) break;
+          if (!targetEmps.some(te => te.id === emp.id)) {
+            targetEmps.push(emp);
+          }
+        }
+
+        // 4g. For each targetEmp, delete any existing shift on that day first, then create client shift
         for (const targetEmp of targetEmps) {
           // Clean up old entries on this day
           await prisma.shift.deleteMany({
@@ -214,9 +320,14 @@ export async function POST(request: Request) {
             },
           });
 
+          if (isClientOffice) {
+            empOfficeCountMap.set(targetEmp.id, (empOfficeCountMap.get(targetEmp.id) || 0) + 1);
+          }
+
           appliedCount++;
           appliedShifts.push({
             clientName: client.name,
+            employeeId: targetEmp.id,
             employeeName: targetEmp.name,
             date: shiftDate.toISOString(),
             dayNum,

@@ -283,6 +283,25 @@ export function generateWeeklySchedule(
         dailyReqs = {};
       }
 
+      const isClientOffice = client.location !== 'HOME' && client.location !== 'Thuis';
+
+      // Helper to count office days an employee already has in the weekly schedule so far
+      const getEmpCurrentOfficeDays = (empId: string): number => {
+        return generatedShifts.filter(s => {
+          if (s.employeeId !== empId) return false;
+          const sDate = new Date(s.date);
+          return (
+            sDate >= start &&
+            sDate < addDays(start, 7) &&
+            s.location !== 'HOME' &&
+            s.location !== 'Thuis' &&
+            s.type !== 'OFF' &&
+            s.type !== 'SICK' &&
+            s.type !== 'VACATION'
+          );
+        }).length;
+      };
+
       for (const dayNum of activeDays) {
         if (!workingDaysArray.includes(dayNum)) continue;
         const currentDate = addDays(start, dayNum - 1);
@@ -296,52 +315,99 @@ export function generateWeeklySchedule(
 
         if (requiredForThisDay <= 0) continue;
 
-        const targetEmps: GeneratorEmployee[] = [];
-
-        // 1. Check member-specific assigned days (e.g. memberDayMap[empId] = [1, 5])
+        // 1. Collect candidates configured for this day
+        let dayCandidates: GeneratorEmployee[] = [];
         for (const emp of assignedEmps) {
           const empDays = memberDayMap[emp.id];
           if (Array.isArray(empDays) && empDays.includes(dayNum)) {
-            targetEmps.push(emp);
+            dayCandidates.push(emp);
           }
         }
 
-        // 2. Check day-keyed fallback (e.g. memberDayMap["1"] = "empId" or ["emp1", "emp2"])
+        // 2. Day-keyed fallback if member-specific not configured
         const dayConfig = memberDayMap[dayNum.toString()] || memberDayMap[dayNum];
         if (dayConfig) {
           if (Array.isArray(dayConfig)) {
             for (const id of dayConfig) {
               const emp = assignedEmps.find(e => e.id === id);
-              if (emp && !targetEmps.some(te => te.id === emp.id)) {
-                targetEmps.push(emp);
+              if (emp && !dayCandidates.some(te => te.id === emp.id)) {
+                dayCandidates.push(emp);
               }
             }
           } else if (typeof dayConfig === 'string') {
             const emp = assignedEmps.find(e => e.id === dayConfig);
-            if (emp && !targetEmps.some(te => te.id === emp.id)) {
-              targetEmps.push(emp);
+            if (emp && !dayCandidates.some(te => te.id === emp.id)) {
+              dayCandidates.push(emp);
             }
           }
         }
 
-        // 3. If fewer than requiredForThisDay are explicitly assigned, fill from available assigned members
-        if (targetEmps.length === 0) {
-          for (const emp of assignedEmps) {
-            if (targetEmps.length >= requiredForThisDay) break;
-            if (!targetEmps.some(te => te.id === emp.id)) {
-              targetEmps.push(emp);
-            }
+        // 3. If nobody has this day explicitly set, all assigned members are candidates
+        if (dayCandidates.length === 0) {
+          dayCandidates = [...assignedEmps];
+        }
+
+        // 4. Filter candidates who are actually available on this day
+        const isCandidateAvailable = (emp: GeneratorEmployee): boolean => {
+          // Check if employee already has an OFF, SICK, or VACATION shift on currentDate
+          const existing = generatedShifts.find(
+            s => s.employeeId === emp.id && isSameDay(new Date(s.date), currentDate)
+          );
+          if (existing && (existing.type === 'OFF' || existing.type === 'SICK' || existing.type === 'VACATION')) {
+            return false;
           }
-        } else if (targetEmps.length < requiredForThisDay) {
-          for (const emp of assignedEmps) {
-            if (targetEmps.length >= requiredForThisDay) break;
-            if (!targetEmps.some(te => te.id === emp.id)) {
-              targetEmps.push(emp);
-            }
+          // Check fixed off days
+          if (emp.fixedOffDays) {
+            try {
+              const offDays: number[] = JSON.parse(emp.fixedOffDays);
+              if (Array.isArray(offDays) && offDays.includes(dayNum)) return false;
+            } catch {}
+          }
+          if (emp.allowedLocation === 'HOME_ONLY' && isClientOffice) {
+            return false;
+          }
+          return true;
+        };
+
+        let availableCandidates = dayCandidates.filter(isCandidateAvailable);
+        if (availableCandidates.length === 0) {
+          availableCandidates = assignedEmps.filter(isCandidateAvailable);
+        }
+
+        // 5. Randomize & Balance candidates:
+        // - Randomize ordering (shuffled) so order of who was added first does NOT dictate assignment every week
+        // - Hold maximum office days accountable: prioritize candidates who have not yet reached their max office days,
+        //   and within those, prioritize those who have worked fewer office days this week so far.
+        const shuffled = [...availableCandidates].sort(() => Math.random() - 0.5);
+
+        const underOfficeLimit: GeneratorEmployee[] = [];
+        const atOfficeLimit: GeneratorEmployee[] = [];
+
+        for (const emp of shuffled) {
+          const maxOffice = emp.maxOfficeDays ?? config.maxOfficeDaysPerWeek;
+          const currentOffice = getEmpCurrentOfficeDays(emp.id);
+          if (isClientOffice && currentOffice >= maxOffice) {
+            atOfficeLimit.push(emp);
+          } else {
+            underOfficeLimit.push(emp);
           }
         }
 
-        // 4. For each target employee, remove any old entry on this day and add client shift
+        // Sort underOfficeLimit by currentOfficeDays ascending for fair distribution
+        underOfficeLimit.sort((a, b) => getEmpCurrentOfficeDays(a.id) - getEmpCurrentOfficeDays(b.id));
+
+        const orderedCandidates = [...underOfficeLimit, ...atOfficeLimit];
+
+        // 6. Select STRICTLY up to requiredForThisDay (never all members when only 1 or N is needed!)
+        const targetEmps: GeneratorEmployee[] = [];
+        for (const emp of orderedCandidates) {
+          if (targetEmps.length >= requiredForThisDay) break;
+          if (!targetEmps.some(te => te.id === emp.id)) {
+            targetEmps.push(emp);
+          }
+        }
+
+        // 7. For each target employee, remove any old entry on this day and add client shift
         for (const targetEmp of targetEmps) {
           // Remove any existing shift for this employee on this day first
           const oldIdx = generatedShifts.findIndex(
