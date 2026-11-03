@@ -315,6 +315,22 @@ export function generateWeeklySchedule(
 
         if (requiredForThisDay <= 0) continue;
 
+        // Check if this client is ALREADY scheduled on this day across the team
+        const alreadyScheduledForClient = generatedShifts.filter(s => {
+          if (!isSameDay(new Date(s.date), currentDate)) return false;
+          if (s.type === 'OFF' || s.type === 'SICK' || s.type === 'VACATION') return false;
+          const locMatch = (client.location && s.location === client.location) || (client.name && s.location === client.name);
+          const noteMatch = Boolean(client.name && s.notes && s.notes.includes(client.name));
+          return Boolean(locMatch || noteMatch);
+        });
+
+        // How many more staff members does this client still need on this day?
+        const neededForThisDay = Math.max(0, requiredForThisDay - alreadyScheduledForClient.length);
+        if (neededForThisDay <= 0) {
+          // Client requirement for this day is ALREADY FULLY SATISFIED! Skip to avoid duplicates.
+          continue;
+        }
+
         // 1. Collect candidates configured for this day
         let dayCandidates: GeneratorEmployee[] = [];
         for (const emp of assignedEmps) {
@@ -398,11 +414,11 @@ export function generateWeeklySchedule(
 
         const orderedCandidates = [...underOfficeLimit, ...atOfficeLimit];
 
-        // 6. Select STRICTLY up to requiredForThisDay (never all members when only 1 or N is needed!)
+        // 6. Select STRICTLY up to neededForThisDay (never all members when only 1 or N is needed!)
         const targetEmps: GeneratorEmployee[] = [];
         for (const emp of orderedCandidates) {
-          if (targetEmps.length >= requiredForThisDay) break;
-          if (!targetEmps.some(te => te.id === emp.id)) {
+          if (targetEmps.length >= neededForThisDay) break;
+          if (!targetEmps.some(te => te.id === emp.id) && !alreadyScheduledForClient.some(as => as.employeeId === emp.id)) {
             targetEmps.push(emp);
           }
         }

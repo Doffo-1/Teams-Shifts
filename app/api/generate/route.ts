@@ -48,21 +48,21 @@ export async function POST(req: Request) {
 
     const employeeIds = employees.map((e: any) => e.id);
 
-    // Fetch existing manual shifts for this week & team
-    const existingShifts = await prisma.shift.findMany({
+    // Fetch user absence shifts (SICK & VACATION) that must be preserved
+    const existingAbsences = await prisma.shift.findMany({
       where: {
         date: { gte: start, lt: end },
         employeeId: { in: employeeIds },
-        isManual: true,
+        type: { in: ['SICK', 'VACATION'] },
       },
     });
 
-    const inputShifts: ShiftInput[] = existingShifts.map((s: any) => ({
+    const inputShifts: ShiftInput[] = existingAbsences.map((s: any) => ({
       employeeId: s.employeeId,
       date: s.date,
       type: s.type,
       location: s.location,
-      isManual: s.isManual,
+      isManual: true,
       customStart: s.customStart,
       customEnd: s.customEnd,
       notes: s.notes,
@@ -117,51 +117,34 @@ export async function POST(req: Request) {
       teamClients
     );
 
-    // Save in transaction: delete previous non-manual shifts and upsert generated & fixed ones
+    // Save in transaction: clean previous shifts for this week and insert fresh generated schedule
     await prisma.$transaction(async (tx: any) => {
+      // 1. Wipe all previous shifts for this team in this week, preserving user absence overrides (SICK & VACATION)
       await tx.shift.deleteMany({
         where: {
           date: { gte: start, lt: end },
           employeeId: { in: employeeIds },
-          isManual: false,
+          type: { notIn: ['SICK', 'VACATION'] },
         },
       });
 
+      // 2. Insert newly generated schedule (recurring fixed days, balanced client shifts, auto-filled shifts)
       for (const shift of result.shifts) {
-        const isExistingManual = existingShifts.some(
-          es => es.employeeId === shift.employeeId && isSameDay(new Date(es.date), new Date(shift.date))
-        );
+        if (shift.type === 'SICK' || shift.type === 'VACATION') continue; // Preserved in place
 
-        if (!isExistingManual) {
-          await tx.shift.upsert({
-            where: {
-              employeeId_date: {
-                employeeId: shift.employeeId,
-                date: new Date(shift.date),
-              },
-            },
-            update: {
-              type: shift.type,
-              location: shift.location,
-              isManual: Boolean(shift.isManual),
-              customStart: shift.customStart || null,
-              customEnd: shift.customEnd || null,
-              notes: shift.notes || null,
-              color: shift.color || null,
-            },
-            create: {
-              employeeId: shift.employeeId,
-              date: new Date(shift.date),
-              type: shift.type,
-              location: shift.location,
-              isManual: Boolean(shift.isManual),
-              customStart: shift.customStart || null,
-              customEnd: shift.customEnd || null,
-              notes: shift.notes || null,
-              color: shift.color || null,
-            },
-          });
-        }
+        await tx.shift.create({
+          data: {
+            employeeId: shift.employeeId,
+            date: new Date(shift.date),
+            type: shift.type,
+            location: shift.location,
+            isManual: Boolean(shift.isManual),
+            customStart: shift.customStart || null,
+            customEnd: shift.customEnd || null,
+            notes: shift.notes || null,
+            color: shift.color || null,
+          },
+        });
       }
     });
 

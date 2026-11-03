@@ -199,6 +199,21 @@ export async function POST(request: Request) {
 
         if (requiredForThisDay <= 0) continue;
 
+        // Check if this client is ALREADY scheduled on this day across the team (in existingShifts or appliedShifts)
+        const alreadyScheduledForClient = existingShifts.filter(s => {
+          if (!isSameDay(new Date(s.date), shiftDate)) return false;
+          if (s.type === 'OFF' || s.type === 'SICK' || s.type === 'VACATION') return false;
+          const locMatch = (client.location && s.location === client.location) || (client.name && s.location === client.name);
+          const noteMatch = Boolean(client.name && s.notes && s.notes.includes(client.name));
+          return Boolean(locMatch || noteMatch);
+        });
+
+        const neededForThisDay = Math.max(0, requiredForThisDay - alreadyScheduledForClient.length);
+        if (neededForThisDay <= 0) {
+          // Client requirement for this day is ALREADY FULLY SATISFIED! Skip to avoid duplicates.
+          continue;
+        }
+
         // Check availability on this date
         const isCandidateAvailable = (emp: any): boolean => {
           // Check if employee already has OFF, SICK, or VACATION on this date
@@ -284,11 +299,11 @@ export async function POST(request: Request) {
 
         const orderedCandidates = [...underLimit, ...atLimit];
 
-        // 4f. Select STRICTLY up to requiredForThisDay (never schedule all candidates when client only needs N)
+        // 4f. Select STRICTLY up to neededForThisDay (never schedule all candidates when client only needs N)
         const targetEmps: any[] = [];
         for (const emp of orderedCandidates) {
-          if (targetEmps.length >= requiredForThisDay) break;
-          if (!targetEmps.some(te => te.id === emp.id)) {
+          if (targetEmps.length >= neededForThisDay) break;
+          if (!targetEmps.some(te => te.id === emp.id) && !alreadyScheduledForClient.some(as => as.employeeId === emp.id)) {
             targetEmps.push(emp);
           }
         }

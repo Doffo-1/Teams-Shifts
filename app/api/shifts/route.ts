@@ -81,9 +81,36 @@ export async function POST(req: Request) {
 export async function DELETE(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
-    const employeeId = searchParams.get('employeeId');
+    const clearWeek = searchParams.get('clearWeek');
+    const teamId = searchParams.get('teamId');
     const dateStr = searchParams.get('date');
 
+    // Clear whole week for a team
+    if (clearWeek === 'true' && dateStr) {
+      const d = new Date(dateStr);
+      const weekStart = startOfWeek(d, { weekStartsOn: 1 });
+      const weekEnd = addDays(weekStart, 7);
+
+      let employeesWhere = {};
+      if (teamId) {
+        const teamEmps = await prisma.employee.findMany({
+          where: { teamId },
+          select: { id: true },
+        });
+        employeesWhere = { employeeId: { in: teamEmps.map(e => e.id) } };
+      }
+
+      const res = await prisma.shift.deleteMany({
+        where: {
+          date: { gte: weekStart, lt: weekEnd },
+          ...employeesWhere,
+        },
+      });
+
+      return NextResponse.json({ success: true, deletedCount: res.count });
+    }
+
+    const employeeId = searchParams.get('employeeId');
     if (!employeeId || !dateStr) {
       return NextResponse.json({ error: 'Missing parameters' }, { status: 400 });
     }

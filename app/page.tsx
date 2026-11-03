@@ -1469,6 +1469,32 @@ export default function Home() {
     setLoading(false);
   };
 
+  // Clear all shifts for the current week
+  const clearWeekShifts = async () => {
+    const teamId = selectedTeamId || currentTeam?.id;
+    if (!teamId) return;
+    if (!window.confirm(`Weet je zeker dat je het hele rooster voor de week van ${format(start, 'd MMMM yyyy')} wilt wissen?`)) {
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/shifts?clearWeek=true&teamId=${teamId}&date=${start.toISOString()}`, {
+        method: 'DELETE',
+      });
+      if (res.ok) {
+        await loadData();
+        showToast('Het rooster voor deze week is volledig gewist!', 'success');
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        showToast(errData.error || 'Kon weekrooster niet wissen', 'error');
+      }
+    } catch (err) {
+      console.error(err);
+      showToast('Fout bij wissen van weekrooster', 'error');
+    }
+    setLoading(false);
+  };
+
   // Copy Shifts
   const handleCopyShifts = async () => {
     const teamId = selectedTeamId || currentTeam?.id;
@@ -2243,6 +2269,20 @@ export default function Home() {
             title="Auto-fill schedule: applies recurring fixed days and generates shifts using team rules"
           >
             <Wand2 size={16} /> Auto-Fill
+          </button>
+
+          <button
+            onClick={clearWeekShifts}
+            disabled={loading}
+            className="btn btn-secondary"
+            style={{
+              color: '#f87171',
+              borderColor: 'rgba(239, 68, 68, 0.35)',
+              background: 'rgba(239, 68, 68, 0.08)',
+            }}
+            title="Wis het gehele shift rooster voor deze week"
+          >
+            <Trash2 size={16} /> Clear Week
           </button>
 
           <label className="btn btn-secondary" style={{ cursor: 'pointer', margin: 0 }} title="Import Teams Shifts Excel">
