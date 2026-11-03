@@ -1903,5 +1903,15 @@ input[type="range"] {
   border-color: var(--primary);
 }
 
+input[type="number"].clean-number-input::-webkit-inner-spin-button,
+input[type="number"].clean-number-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"].clean-number-input {
+  -moz-appearance: textfield;
+}
+
+
 
 

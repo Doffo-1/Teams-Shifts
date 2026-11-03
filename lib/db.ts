@@ -67,6 +67,7 @@ export async function ensureDefaultData() {
           "assignedEmployeeIds" TEXT DEFAULT '[]',
           "memberDayMap" TEXT DEFAULT '{}',
           "requiredMembersPerDay" INTEGER DEFAULT 1,
+          "dailyRequirements" TEXT DEFAULT '{}',
           "notes" TEXT,
           "isActive" BOOLEAN DEFAULT 1,
           "createdAt" DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -75,6 +76,13 @@ export async function ensureDefaultData() {
         );
       `);
       await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "Client_teamId_idx" ON "Client" ("teamId");`);
+    } else {
+      const hasDailyRequirements = clientTable.some((col: any) => col.name === 'dailyRequirements');
+      if (!hasDailyRequirements) {
+        try {
+          await prisma.$executeRawUnsafe(`ALTER TABLE "Client" ADD COLUMN "dailyRequirements" TEXT DEFAULT '{}';`);
+        } catch {}
+      }
     }
   } catch (error) {
     // Client table already exists or unable to create

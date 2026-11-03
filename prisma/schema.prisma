@@ -128,6 +128,7 @@ model Client {
   assignedEmployeeIds   String    @default("[]") // JSON array of Employee IDs
   memberDayMap          String?   @default("{}") // JSON map of day to employeeId
   requiredMembersPerDay Int       @default(1)
+  dailyRequirements     String?   @default("{}") // JSON map of dayNum to required count e.g. {"1":1,"2":7,"3":3,"4":2,"5":4}
   notes                 String?
   isActive              Boolean   @default(true)
   createdAt             DateTime  @default(now())

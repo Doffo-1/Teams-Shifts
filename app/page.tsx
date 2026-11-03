@@ -140,8 +140,9 @@ interface ClientData {
   monthlyWeek?: number | null;
   days: number[];
   assignedEmployeeIds: string[];
-  memberDayMap?: Record<string, string> | null;
+  memberDayMap?: Record<string, any> | null;
   requiredMembersPerDay?: number;
+  dailyRequirements?: Record<string, number> | string | null;
   notes?: string | null;
   isActive?: boolean;
 }
@@ -174,6 +175,7 @@ export default function Home() {
     assignedEmployeeIds: string[];
     memberDayMap: Record<string, any>;
     requiredMembersPerDay: number;
+    dailyRequirements: Record<number, number>;
     notes: string;
     isActive: boolean;
   }>({
@@ -189,6 +191,7 @@ export default function Home() {
     assignedEmployeeIds: [],
     memberDayMap: {},
     requiredMembersPerDay: 1,
+    dailyRequirements: { 1: 1, 2: 1, 3: 1, 4: 1, 5: 1 },
     notes: '',
     isActive: true,
   });
@@ -854,6 +857,7 @@ export default function Home() {
           days: typeof c.days === 'string' ? JSON.parse(c.days) : (c.days || [1, 2, 3, 4, 5]),
           assignedEmployeeIds: typeof c.assignedEmployeeIds === 'string' ? JSON.parse(c.assignedEmployeeIds) : (c.assignedEmployeeIds || []),
           memberDayMap: typeof c.memberDayMap === 'string' ? JSON.parse(c.memberDayMap) : (c.memberDayMap || {}),
+          dailyRequirements: typeof c.dailyRequirements === 'string' ? JSON.parse(c.dailyRequirements) : (c.dailyRequirements || {}),
         }));
         setTeamClients(parsedClients);
       }
@@ -1003,6 +1007,23 @@ export default function Home() {
         }
       }
 
+      let dailyReqs: Record<number, number> = { 1: 1, 2: 1, 3: 1, 4: 1, 5: 1 };
+      try {
+        let parsedReqs: any = {};
+        if (typeof client.dailyRequirements === 'string') parsedReqs = JSON.parse(client.dailyRequirements);
+        else if (client.dailyRequirements && typeof client.dailyRequirements === 'object') parsedReqs = client.dailyRequirements;
+        const defaultReq = client.requiredMembersPerDay && client.requiredMembersPerDay > 0 ? client.requiredMembersPerDay : 1;
+        for (let d = 1; d <= 5; d++) {
+          if (parsedReqs[d] !== undefined || parsedReqs[d.toString()] !== undefined) {
+            dailyReqs[d] = Number(parsedReqs[d] ?? parsedReqs[d.toString()]);
+          } else {
+            dailyReqs[d] = defaultReq;
+          }
+        }
+      } catch {
+        dailyReqs = { 1: 1, 2: 1, 3: 1, 4: 1, 5: 1 };
+      }
+
       setClientForm({
         id: client.id,
         name: client.name,
@@ -1017,6 +1038,7 @@ export default function Home() {
         assignedEmployeeIds: empIds,
         memberDayMap: parsedMap,
         requiredMembersPerDay: client.requiredMembersPerDay && client.requiredMembersPerDay > 0 ? client.requiredMembersPerDay : 1,
+        dailyRequirements: dailyReqs,
         notes: client.notes || '',
         isActive: client.isActive !== false,
       });
@@ -1035,11 +1057,42 @@ export default function Home() {
         assignedEmployeeIds: [],
         memberDayMap: {},
         requiredMembersPerDay: 1,
+        dailyRequirements: { 1: 1, 2: 1, 3: 1, 4: 1, 5: 1 },
         notes: '',
         isActive: true,
       });
     }
     setClientModalOpen(true);
+  };
+
+  const setDayRequirement = (dayNum: number, count: number) => {
+    const safeCount = Math.max(0, count);
+    const nextReqs = { ...clientForm.dailyRequirements, [dayNum]: safeCount };
+    let nextDays = [...clientForm.days];
+    if (safeCount > 0 && !nextDays.includes(dayNum)) {
+      nextDays.push(dayNum);
+      nextDays.sort();
+    } else if (safeCount === 0 && nextDays.includes(dayNum)) {
+      nextDays = nextDays.filter(d => d !== dayNum);
+    }
+    setClientForm({
+      ...clientForm,
+      dailyRequirements: nextReqs,
+      days: nextDays,
+    });
+  };
+
+  const bulkSetDayRequirements = (count: number) => {
+    const safeCount = Math.max(1, count);
+    const nextReqs: Record<number, number> = {};
+    for (let d = 1; d <= 5; d++) {
+      nextReqs[d] = safeCount;
+    }
+    setClientForm({
+      ...clientForm,
+      dailyRequirements: nextReqs,
+      requiredMembersPerDay: safeCount,
+    });
   };
 
   const getClientMemberDays = (empId: string): number[] => {
@@ -1125,6 +1178,7 @@ export default function Home() {
         assignedEmployeeIds: clientForm.assignedEmployeeIds,
         memberDayMap: clientForm.memberDayMap,
         requiredMembersPerDay: clientForm.requiredMembersPerDay,
+        dailyRequirements: clientForm.dailyRequirements,
         notes: clientForm.notes.trim() || null,
         isActive: clientForm.isActive,
       };
@@ -3233,10 +3287,12 @@ export default function Home() {
                             type="button"
                             className={`day-pill-btn ${isSelected ? 'active' : ''}`}
                             onClick={() => {
-                              const nextDays = isSelected
-                                ? clientForm.days.filter(x => x !== d.day)
-                                : [...clientForm.days, d.day].sort();
-                              setClientForm({ ...clientForm, days: nextDays });
+                              if (isSelected) {
+                                setDayRequirement(d.day, 0);
+                              } else {
+                                const prev = clientForm.dailyRequirements[d.day];
+                                setDayRequirement(d.day, prev && prev > 0 ? prev : 1);
+                              }
                             }}
                           >
                             {d.short}
@@ -3251,59 +3307,141 @@ export default function Home() {
                     )}
                   </div>
 
-                  {/* Required Staff Per Scheduled Day */}
+                  {/* Dynamic Daily Staff Requirements (Mon - Fri) */}
                   <div style={{ background: 'rgba(15, 23, 42, 0.7)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '1rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
                       <div>
-                        <label className="label" style={{ margin: 0 }}>Staff Required per Scheduled Day</label>
+                        <label className="label" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                          <Users size={15} style={{ color: 'var(--primary)' }} />
+                          Daily Staff Requirements (Mon – Fri)
+                        </label>
                         <div style={{ fontSize: '0.75rem', color: 'var(--slate-400)' }}>
-                          How many team members must be scheduled on this client each day
+                          Custom staff count per day (e.g. Monday 1, Tuesday 7, Wednesday 3, etc.)
                         </div>
                       </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', background: 'var(--slate-850)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '0.25rem 0.5rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: '0.72rem', color: 'var(--slate-400)', marginRight: '0.1rem' }}>Bulk set:</span>
+                        {[1, 2, 3, 4, 5].map(n => (
                           <button
+                            key={n}
                             type="button"
-                            className="staff-counter-btn"
-                            onClick={() => setClientForm({ ...clientForm, requiredMembersPerDay: Math.max(1, (clientForm.requiredMembersPerDay || 1) - 1) })}
-                            title="Decrease staff count"
+                            onClick={() => bulkSetDayRequirements(n)}
+                            title={`Set all 5 weekdays to require ${n} staff`}
+                            style={{
+                              padding: '0.2rem 0.5rem',
+                              fontSize: '0.72rem',
+                              fontWeight: 700,
+                              borderRadius: 'var(--radius-sm)',
+                              background: 'var(--slate-800)',
+                              border: '1px solid var(--slate-700)',
+                              color: 'var(--slate-300)',
+                              cursor: 'pointer',
+                              transition: 'all 0.15s ease',
+                            }}
                           >
-                            <Minus size={14} />
+                            {n}
                           </button>
-                          <span style={{ fontSize: '1.15rem', fontWeight: 800, color: 'white', minWidth: 36, textAlign: 'center' }}>
-                            {clientForm.requiredMembersPerDay || 1}
-                          </span>
-                          <button
-                            type="button"
-                            className="staff-counter-btn"
-                            onClick={() => setClientForm({ ...clientForm, requiredMembersPerDay: (clientForm.requiredMembersPerDay || 1) + 1 })}
-                            title="Increase staff count"
-                          >
-                            <Plus size={14} />
-                          </button>
-                        </div>
+                        ))}
                       </div>
                     </div>
-                    <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
-                      {[1, 2, 3, 4].map(n => (
-                        <button
-                          key={n}
-                          type="button"
-                          onClick={() => setClientForm({ ...clientForm, requiredMembersPerDay: n })}
-                          style={{
-                            padding: '0.3rem 0.65rem',
-                            fontSize: '0.75rem',
-                            fontWeight: 600,
-                            borderRadius: 'var(--radius-sm)',
-                            background: (clientForm.requiredMembersPerDay || 1) === n ? 'rgba(99, 102, 241, 0.25)' : 'var(--slate-800)',
-                            border: `1px solid ${(clientForm.requiredMembersPerDay || 1) === n ? 'var(--primary)' : 'var(--slate-700)'}`,
-                            color: (clientForm.requiredMembersPerDay || 1) === n ? 'white' : 'var(--slate-400)',
-                            cursor: 'pointer',
-                          }}
-                        >
-                          {n} {n === 1 ? 'Person / day' : 'People / day'}
-                        </button>
-                      ))}
+
+                    {/* Per-Weekday Steppers and Direct Inputs */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
+                      {[
+                        { day: 1, name: 'Monday', short: 'Mon' },
+                        { day: 2, name: 'Tuesday', short: 'Tue' },
+                        { day: 3, name: 'Wednesday', short: 'Wed' },
+                        { day: 4, name: 'Thursday', short: 'Thu' },
+                        { day: 5, name: 'Friday', short: 'Fri' },
+                      ].map(d => {
+                        const isDayActive = clientForm.days.includes(d.day);
+                        const dayCount = isDayActive ? (clientForm.dailyRequirements[d.day] ?? 1) : 0;
+                        return (
+                          <div
+                            key={d.day}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              background: isDayActive ? 'rgba(30, 41, 59, 0.65)' : 'rgba(15, 23, 42, 0.4)',
+                              border: `1px solid ${isDayActive ? 'rgba(99, 102, 241, 0.35)' : 'rgba(255, 255, 255, 0.05)'}`,
+                              borderRadius: 'var(--radius-sm)',
+                              padding: '0.45rem 0.65rem',
+                              transition: 'all 0.15s ease',
+                            }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                              <button
+                                type="button"
+                                className={`day-pill-btn ${isDayActive ? 'active' : ''}`}
+                                style={{ width: 44, height: 28, fontSize: '0.75rem', margin: 0, padding: 0 }}
+                                onClick={() => {
+                                  if (isDayActive) {
+                                    setDayRequirement(d.day, 0);
+                                  } else {
+                                    const prev = clientForm.dailyRequirements[d.day];
+                                    setDayRequirement(d.day, prev && prev > 0 ? prev : 1);
+                                  }
+                                }}
+                                title={isDayActive ? `Click to mark ${d.name} inactive` : `Click to activate ${d.name}`}
+                              >
+                                {d.short}
+                              </button>
+                              <div>
+                                <span style={{ fontWeight: 600, fontSize: '0.85rem', color: isDayActive ? 'white' : 'var(--slate-500)' }}>
+                                  {d.name}
+                                </span>
+                                <div style={{ fontSize: '0.72rem', color: isDayActive ? (dayCount > 0 ? 'var(--accent)' : 'var(--slate-400)') : 'var(--slate-600)' }}>
+                                  {isDayActive ? (dayCount > 0 ? `${dayCount} ${dayCount === 1 ? 'person required' : 'people required'}` : '0 staff (inactive)') : 'Not scheduled'}
+                                </div>
+                              </div>
+                            </div>
+
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', background: 'var(--slate-850)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '0.2rem 0.35rem' }}>
+                              <button
+                                type="button"
+                                className="staff-counter-btn"
+                                onClick={() => setDayRequirement(d.day, Math.max(0, dayCount - 1))}
+                                title={`Decrease staff for ${d.name}`}
+                                style={{ width: 26, height: 26 }}
+                              >
+                                <Minus size={13} />
+                              </button>
+                              <input
+                                type="number"
+                                min={0}
+                                max={50}
+                                className="clean-number-input"
+                                value={dayCount}
+                                onChange={e => {
+                                  const val = parseInt(e.target.value, 10);
+                                  setDayRequirement(d.day, isNaN(val) ? 0 : Math.max(0, val));
+                                }}
+                                style={{
+                                  width: 44,
+                                  background: 'transparent',
+                                  border: 'none',
+                                  color: dayCount > 0 ? 'white' : 'var(--slate-500)',
+                                  fontWeight: 800,
+                                  fontSize: '0.95rem',
+                                  textAlign: 'center',
+                                  padding: 0,
+                                  outline: 'none',
+                                }}
+                              />
+                              <button
+                                type="button"
+                                className="staff-counter-btn"
+                                onClick={() => setDayRequirement(d.day, dayCount + 1)}
+                                title={`Increase staff for ${d.name}`}
+                                style={{ width: 26, height: 26 }}
+                              >
+                                <Plus size={13} />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 </div>
@@ -3553,8 +3691,8 @@ export default function Home() {
                         Day-by-Day Coverage & Member Overview
                       </h2>
                     </div>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--slate-400)' }}>
-                      Target: {clientForm.requiredMembersPerDay || 1} staff per scheduled day
+                    <span style={{ fontSize: '0.75rem', color: 'var(--accent)', fontWeight: 600 }}>
+                      Dynamic targets configured per weekday
                     </span>
                   </div>
 
@@ -3571,7 +3709,7 @@ export default function Home() {
                       { day: 5, name: 'Friday', short: 'Fri' },
                     ].map(d => {
                       const isClientActiveDay = clientForm.days.includes(d.day);
-                      const required = isClientActiveDay ? (clientForm.requiredMembersPerDay || 1) : 0;
+                      const required = isClientActiveDay ? (clientForm.dailyRequirements?.[d.day] ?? (clientForm.requiredMembersPerDay || 1)) : 0;
                       const assignedOnThisDay = clientForm.assignedEmployeeIds
                         .map(id => employees.find(e => e.id === id))
                         .filter(Boolean)
@@ -3591,7 +3729,7 @@ export default function Home() {
                                 {d.name}
                               </span>
                               <span style={{ fontSize: '0.75rem', color: isClientActiveDay ? 'var(--slate-400)' : 'var(--slate-600)' }}>
-                                {isClientActiveDay ? `Required: ${required} staff` : 'Not scheduled for this client'}
+                                {isClientActiveDay ? `Required: ${required} ${required === 1 ? 'person' : 'staff'}` : 'Not scheduled for this client'}
                               </span>
                             </div>
 

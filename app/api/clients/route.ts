@@ -52,6 +52,7 @@ export async function POST(request: Request) {
       assignedEmployeeIds = '[]',
       memberDayMap = '{}',
       requiredMembersPerDay = 1,
+      dailyRequirements = '{}',
       notes = null,
       isActive = true,
     } = body;
@@ -74,6 +75,7 @@ export async function POST(request: Request) {
       assignedEmployeeIds: typeof assignedEmployeeIds === 'string' ? assignedEmployeeIds : JSON.stringify(assignedEmployeeIds),
       memberDayMap: typeof memberDayMap === 'string' ? memberDayMap : JSON.stringify(memberDayMap),
       requiredMembersPerDay: parseInt(requiredMembersPerDay?.toString() || '1', 10) || 1,
+      dailyRequirements: typeof dailyRequirements === 'string' ? dailyRequirements : JSON.stringify(dailyRequirements),
       notes: notes?.trim() || null,
       isActive: isActive !== false,
     };
@@ -86,8 +88,8 @@ export async function POST(request: Request) {
     } catch {
       const id = 'cl_' + Date.now().toString(36) + Math.random().toString(36).substring(2, 7);
       await prisma.$executeRawUnsafe(
-        `INSERT INTO "Client" ("id", "teamId", "name", "color", "location", "startTime", "endTime", "frequency", "weekParity", "monthlyWeek", "days", "assignedEmployeeIds", "memberDayMap", "requiredMembersPerDay", "notes", "isActive", "createdAt", "updatedAt")
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+        `INSERT INTO "Client" ("id", "teamId", "name", "color", "location", "startTime", "endTime", "frequency", "weekParity", "monthlyWeek", "days", "assignedEmployeeIds", "memberDayMap", "requiredMembersPerDay", "dailyRequirements", "notes", "isActive", "createdAt", "updatedAt")
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
         id,
         clientData.teamId,
         clientData.name,
@@ -102,6 +104,7 @@ export async function POST(request: Request) {
         clientData.assignedEmployeeIds,
         clientData.memberDayMap,
         clientData.requiredMembersPerDay,
+        clientData.dailyRequirements,
         clientData.notes,
         clientData.isActive ? 1 : 0
       );
@@ -133,6 +136,7 @@ export async function PUT(request: Request) {
       assignedEmployeeIds,
       memberDayMap,
       requiredMembersPerDay,
+      dailyRequirements,
       notes,
       isActive,
     } = body;
@@ -160,6 +164,9 @@ export async function PUT(request: Request) {
     if (requiredMembersPerDay !== undefined) {
       updateData.requiredMembersPerDay = parseInt(requiredMembersPerDay.toString(), 10) || 1;
     }
+    if (dailyRequirements !== undefined) {
+      updateData.dailyRequirements = typeof dailyRequirements === 'string' ? dailyRequirements : JSON.stringify(dailyRequirements);
+    }
     if (notes !== undefined) updateData.notes = notes?.trim() || null;
     if (isActive !== undefined) updateData.isActive = Boolean(isActive);
 
@@ -184,6 +191,7 @@ export async function PUT(request: Request) {
           "assignedEmployeeIds" = COALESCE(?, "assignedEmployeeIds"),
           "memberDayMap" = COALESCE(?, "memberDayMap"),
           "requiredMembersPerDay" = COALESCE(?, "requiredMembersPerDay"),
+          "dailyRequirements" = COALESCE(?, "dailyRequirements"),
           "notes" = ?,
           "isActive" = COALESCE(?, "isActive"),
           "updatedAt" = CURRENT_TIMESTAMP
@@ -200,6 +208,7 @@ export async function PUT(request: Request) {
         updateData.assignedEmployeeIds ?? null,
         updateData.memberDayMap ?? null,
         updateData.requiredMembersPerDay ?? null,
+        updateData.dailyRequirements ?? null,
         updateData.notes ?? null,
         updateData.isActive !== undefined ? (updateData.isActive ? 1 : 0) : null,
         id

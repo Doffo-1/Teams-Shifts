@@ -28,8 +28,9 @@ export interface GeneratorClient {
   monthlyWeek?: number | null;
   days: string | number[];
   assignedEmployeeIds: string | string[];
-  memberDayMap?: string | Record<string, string> | null;
+  memberDayMap?: string | Record<string, any> | null;
   requiredMembersPerDay?: number;
+  dailyRequirements?: string | Record<string, number> | null;
   notes?: string | null;
   isActive?: boolean;
 }
@@ -274,13 +275,26 @@ export function generateWeeklySchedule(
 
       if (assignedEmps.length === 0) continue;
 
-      const requiredCount = client.requiredMembersPerDay && client.requiredMembersPerDay > 0
-        ? client.requiredMembersPerDay
-        : 1;
+      let dailyReqs: Record<string, number> = {};
+      try {
+        if (typeof client.dailyRequirements === 'string') dailyReqs = JSON.parse(client.dailyRequirements);
+        else if (client.dailyRequirements && typeof client.dailyRequirements === 'object') dailyReqs = client.dailyRequirements as any;
+      } catch {
+        dailyReqs = {};
+      }
 
       for (const dayNum of activeDays) {
         if (!workingDaysArray.includes(dayNum)) continue;
         const currentDate = addDays(start, dayNum - 1);
+
+        // Dynamic per-day staff requirement (e.g. Mon: 1, Tue: 7, Wed: 3, etc.)
+        const requiredForThisDay = dailyReqs[dayNum.toString()] !== undefined
+          ? Number(dailyReqs[dayNum.toString()])
+          : (dailyReqs[dayNum] !== undefined
+            ? Number(dailyReqs[dayNum])
+            : (client.requiredMembersPerDay && client.requiredMembersPerDay > 0 ? client.requiredMembersPerDay : 1));
+
+        if (requiredForThisDay <= 0) continue;
 
         const targetEmps: GeneratorEmployee[] = [];
 
@@ -310,17 +324,17 @@ export function generateWeeklySchedule(
           }
         }
 
-        // 3. If fewer than requiredCount are explicitly assigned, fill from available assigned members
+        // 3. If fewer than requiredForThisDay are explicitly assigned, fill from available assigned members
         if (targetEmps.length === 0) {
           for (const emp of assignedEmps) {
-            if (targetEmps.length >= requiredCount) break;
+            if (targetEmps.length >= requiredForThisDay) break;
             if (!targetEmps.some(te => te.id === emp.id)) {
               targetEmps.push(emp);
             }
           }
-        } else if (targetEmps.length < requiredCount) {
+        } else if (targetEmps.length < requiredForThisDay) {
           for (const emp of assignedEmps) {
-            if (targetEmps.length >= requiredCount) break;
+            if (targetEmps.length >= requiredForThisDay) break;
             if (!targetEmps.some(te => te.id === emp.id)) {
               targetEmps.push(emp);
             }

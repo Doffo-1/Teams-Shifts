@@ -118,9 +118,13 @@ export async function POST(request: Request) {
 
       if (validAssignedEmps.length === 0) continue;
 
-      const requiredCount = client.requiredMembersPerDay && client.requiredMembersPerDay > 0
-        ? client.requiredMembersPerDay
-        : 1;
+      let dailyReqs: Record<string, number> = {};
+      try {
+        if (typeof client.dailyRequirements === 'string') dailyReqs = JSON.parse(client.dailyRequirements);
+        else if (client.dailyRequirements && typeof client.dailyRequirements === 'object') dailyReqs = client.dailyRequirements;
+      } catch {
+        dailyReqs = {};
+      }
 
       // 4. For each active day in the week
       for (const dayNum of activeDays) {
@@ -128,6 +132,15 @@ export async function POST(request: Request) {
         const shiftDate = addDays(monday, dayNum - 1);
         const dayStart = startOfDay(shiftDate);
         const dayEnd = endOfDay(shiftDate);
+
+        // Dynamic per-day staff requirement (e.g. Mon: 1, Tue: 7, Wed: 3, etc.)
+        const requiredForThisDay = dailyReqs[dayNum.toString()] !== undefined
+          ? Number(dailyReqs[dayNum.toString()])
+          : (dailyReqs[dayNum] !== undefined
+            ? Number(dailyReqs[dayNum])
+            : (client.requiredMembersPerDay && client.requiredMembersPerDay > 0 ? client.requiredMembersPerDay : 1));
+
+        if (requiredForThisDay <= 0) continue;
 
         const targetEmps: any[] = [];
 
@@ -157,17 +170,17 @@ export async function POST(request: Request) {
           }
         }
 
-        // 4c. Fill up to requiredCount if needed
+        // 4c. Fill up to requiredForThisDay if needed
         if (targetEmps.length === 0) {
           for (const emp of validAssignedEmps) {
-            if (targetEmps.length >= requiredCount) break;
+            if (targetEmps.length >= requiredForThisDay) break;
             if (!targetEmps.some(te => te.id === emp.id)) {
               targetEmps.push(emp);
             }
           }
-        } else if (targetEmps.length < requiredCount) {
+        } else if (targetEmps.length < requiredForThisDay) {
           for (const emp of validAssignedEmps) {
-            if (targetEmps.length >= requiredCount) break;
+            if (targetEmps.length >= requiredForThisDay) break;
             if (!targetEmps.some(te => te.id === emp.id)) {
               targetEmps.push(emp);
             }
