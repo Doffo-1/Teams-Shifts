@@ -81,7 +81,7 @@ export async function POST(req: Request) {
           `SELECT * FROM "Client" WHERE "teamId" = ? AND "isActive" = 1`,
           team.id
         )) as any[];
-      } catch {}
+      } catch { }
     }
 
     // Generate schedule using team's configured rules, applying fixed days & client shifts upfront

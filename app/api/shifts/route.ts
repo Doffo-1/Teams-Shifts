@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { prisma, ensureDefaultData } from '@/lib/db';
-import { startOfWeek, addDays } from 'date-fns';
+import { startOfWeek, addDays, startOfDay, endOfDay } from 'date-fns';
 
 export async function GET(req: Request) {
   await ensureDefaultData();
@@ -43,26 +43,25 @@ export async function POST(req: Request) {
     }
 
     const d = new Date(date);
+    const dayStart = startOfDay(d);
+    const dayEnd = endOfDay(d);
 
-    const shift = await prisma.shift.upsert({
+    // Always remove any existing shift for this employee on this day first
+    // to guarantee no duplicate or stale entries exist
+    await prisma.shift.deleteMany({
       where: {
-        employeeId_date: {
-          employeeId,
-          date: d,
+        employeeId,
+        date: {
+          gte: dayStart,
+          lte: dayEnd,
         },
       },
-      update: {
-        type: type || 'EARLY',
-        location: location || 'OFFICE',
-        isManual: isManual !== undefined ? Boolean(isManual) : true,
-        customStart: customStart || null,
-        customEnd: customEnd || null,
-        notes: notes || null,
-        color: color || null,
-      },
-      create: {
+    });
+
+    const shift = await prisma.shift.create({
+      data: {
         employeeId,
-        date: d,
+        date: dayStart,
         type: type || 'EARLY',
         location: location || 'OFFICE',
         isManual: isManual !== undefined ? Boolean(isManual) : true,
@@ -89,10 +88,14 @@ export async function DELETE(req: Request) {
       return NextResponse.json({ error: 'Missing parameters' }, { status: 400 });
     }
 
+    const d = new Date(dateStr);
     await prisma.shift.deleteMany({
       where: {
         employeeId,
-        date: new Date(dateStr),
+        date: {
+          gte: startOfDay(d),
+          lte: endOfDay(d),
+        },
       },
     });
 

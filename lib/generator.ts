@@ -260,7 +260,7 @@ export function generateWeeklySchedule(
         assignedEmpIds = [];
       }
 
-      let memberDayMap: Record<string, string> = {};
+      let memberDayMap: Record<string, any> = {};
       try {
         if (typeof client.memberDayMap === 'string') memberDayMap = JSON.parse(client.memberDayMap);
         else if (client.memberDayMap && typeof client.memberDayMap === 'object') memberDayMap = client.memberDayMap;
@@ -274,48 +274,82 @@ export function generateWeeklySchedule(
 
       if (assignedEmps.length === 0) continue;
 
+      const requiredCount = client.requiredMembersPerDay && client.requiredMembersPerDay > 0
+        ? client.requiredMembersPerDay
+        : 1;
+
       for (const dayNum of activeDays) {
         if (!workingDaysArray.includes(dayNum)) continue;
         const currentDate = addDays(start, dayNum - 1);
 
-        // Check if designated or available assigned employee exists
-        let targetEmp: GeneratorEmployee | undefined = undefined;
-        const designatedId = memberDayMap[dayNum.toString()] || memberDayMap[dayNum];
-        if (designatedId) {
-          targetEmp = assignedEmps.find(e => e.id === designatedId);
+        const targetEmps: GeneratorEmployee[] = [];
+
+        // 1. Check member-specific assigned days (e.g. memberDayMap[empId] = [1, 5])
+        for (const emp of assignedEmps) {
+          const empDays = memberDayMap[emp.id];
+          if (Array.isArray(empDays) && empDays.includes(dayNum)) {
+            targetEmps.push(emp);
+          }
         }
 
-        if (!targetEmp) {
-          // Find first assigned employee not already having a shift on this day
-          targetEmp = assignedEmps.find(emp => {
-            return !generatedShifts.some(
-              s => s.employeeId === emp.id && isSameDay(new Date(s.date), currentDate)
-            );
+        // 2. Check day-keyed fallback (e.g. memberDayMap["1"] = "empId" or ["emp1", "emp2"])
+        const dayConfig = memberDayMap[dayNum.toString()] || memberDayMap[dayNum];
+        if (dayConfig) {
+          if (Array.isArray(dayConfig)) {
+            for (const id of dayConfig) {
+              const emp = assignedEmps.find(e => e.id === id);
+              if (emp && !targetEmps.some(te => te.id === emp.id)) {
+                targetEmps.push(emp);
+              }
+            }
+          } else if (typeof dayConfig === 'string') {
+            const emp = assignedEmps.find(e => e.id === dayConfig);
+            if (emp && !targetEmps.some(te => te.id === emp.id)) {
+              targetEmps.push(emp);
+            }
+          }
+        }
+
+        // 3. If fewer than requiredCount are explicitly assigned, fill from available assigned members
+        if (targetEmps.length === 0) {
+          for (const emp of assignedEmps) {
+            if (targetEmps.length >= requiredCount) break;
+            if (!targetEmps.some(te => te.id === emp.id)) {
+              targetEmps.push(emp);
+            }
+          }
+        } else if (targetEmps.length < requiredCount) {
+          for (const emp of assignedEmps) {
+            if (targetEmps.length >= requiredCount) break;
+            if (!targetEmps.some(te => te.id === emp.id)) {
+              targetEmps.push(emp);
+            }
+          }
+        }
+
+        // 4. For each target employee, remove any old entry on this day and add client shift
+        for (const targetEmp of targetEmps) {
+          // Remove any existing shift for this employee on this day first
+          const oldIdx = generatedShifts.findIndex(
+            s => s.employeeId === targetEmp.id && isSameDay(new Date(s.date), currentDate)
+          );
+          if (oldIdx >= 0) {
+            generatedShifts.splice(oldIdx, 1);
+          }
+
+          generatedShifts.push({
+            employeeId: targetEmp.id,
+            date: currentDate,
+            type: 'CUSTOM',
+            location: client.location || client.name,
+            customStart: client.startTime || '08:30',
+            customEnd: client.endTime || '17:00',
+            color: client.color || 'PINK',
+            notes: client.notes || null,
+            isManual: true,
           });
+          fixedAppliedCount++;
         }
-
-        if (!targetEmp) {
-          targetEmp = assignedEmps[0];
-        }
-
-        // If targetEmp already has a shift on this day, don't overwrite
-        const alreadyHasShift = generatedShifts.some(
-          s => s.employeeId === targetEmp!.id && isSameDay(new Date(s.date), currentDate)
-        );
-        if (alreadyHasShift) continue;
-
-        generatedShifts.push({
-          employeeId: targetEmp.id,
-          date: currentDate,
-          type: 'CUSTOM',
-          location: client.location || client.name,
-          customStart: client.startTime || '08:30',
-          customEnd: client.endTime || '17:00',
-          color: client.color || 'PINK',
-          notes: client.notes || null,
-          isManual: true,
-        });
-        fixedAppliedCount++;
       }
     }
   }

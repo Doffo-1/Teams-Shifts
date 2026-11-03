@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { prisma, ensureDefaultData } from '@/lib/db';
-import { getISOWeek, getWeekOfMonth, startOfWeek, addDays } from 'date-fns';
+import { getISOWeek, getWeekOfMonth, startOfWeek, addDays, startOfDay, endOfDay } from 'date-fns';
 
 export const dynamic = 'force-dynamic';
 
@@ -58,50 +58,38 @@ export async function POST(request: Request) {
     }
 
     const empMap = new Map<string, any>(employees.map(e => [e.id, e]));
+
     let appliedCount = 0;
     const appliedShifts: any[] = [];
 
     for (const client of clients) {
-      if (!client.isActive) continue;
-
-      // 1. Check week frequency recurrence
-      let isWeekActive = false;
+      // 1. Check Frequency & Week Parity
       const freq = client.frequency || 'EVERY_WEEK';
-      const parity = client.weekParity || 'ALL';
+      let isWeekActive = false;
 
       if (freq === 'EVERY_WEEK') {
         isWeekActive = true;
       } else if (freq === 'EVERY_OTHER_WEEK') {
-        if (parity === 'ODD') {
-          isWeekActive = isoWeek % 2 === 1;
-        } else if (parity === 'EVEN') {
-          isWeekActive = isoWeek % 2 === 0;
-        } else {
-          // Default to even weeks if ALL / not specified
-          isWeekActive = isoWeek % 2 === 0;
-        }
+        const parity = client.weekParity || 'ALL';
+        if (parity === 'ODD') isWeekActive = isoWeek % 2 === 1;
+        else if (parity === 'EVEN') isWeekActive = isoWeek % 2 === 0;
+        else isWeekActive = isoWeek % 2 === 0;
       } else if (freq === 'EVERY_MONTH') {
-        const targetMonthlyWeek = client.monthlyWeek || 1;
-        isWeekActive = monthWeek === targetMonthlyWeek;
+        isWeekActive = monthWeek === (client.monthlyWeek || 1);
       }
 
-      if (!isWeekActive) {
-        continue;
-      }
+      if (!isWeekActive) continue;
 
-      // 2. Parse active days (1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri)
+      // 2. Active Days
       let activeDays: number[] = [1, 2, 3, 4, 5];
       try {
-        if (typeof client.days === 'string') {
-          activeDays = JSON.parse(client.days);
-        } else if (Array.isArray(client.days)) {
-          activeDays = client.days;
-        }
+        if (typeof client.days === 'string') activeDays = JSON.parse(client.days);
+        else if (Array.isArray(client.days)) activeDays = client.days;
       } catch {
         activeDays = [1, 2, 3, 4, 5];
       }
 
-      // 3. Parse assigned employees & member day map
+      // 3. Assigned Employees
       let assignedEmpIds: string[] = [];
       try {
         if (typeof client.assignedEmployeeIds === 'string') {
@@ -113,7 +101,7 @@ export async function POST(request: Request) {
         assignedEmpIds = [];
       }
 
-      let memberDayMap: Record<string, string> = {};
+      let memberDayMap: Record<string, any> = {};
       try {
         if (typeof client.memberDayMap === 'string') {
           memberDayMap = JSON.parse(client.memberDayMap);
@@ -128,82 +116,99 @@ export async function POST(request: Request) {
         .map(id => empMap.get(id))
         .filter(Boolean);
 
-      if (validAssignedEmps.length === 0) {
-        // No members assigned to this client yet
-        continue;
-      }
+      if (validAssignedEmps.length === 0) continue;
+
+      const requiredCount = client.requiredMembersPerDay && client.requiredMembersPerDay > 0
+        ? client.requiredMembersPerDay
+        : 1;
 
       // 4. For each active day in the week
       for (const dayNum of activeDays) {
         if (dayNum < 1 || dayNum > 5) continue;
         const shiftDate = addDays(monday, dayNum - 1);
+        const dayStart = startOfDay(shiftDate);
+        const dayEnd = endOfDay(shiftDate);
 
-        // Determine which employee goes on this day
-        let targetEmp: any = null;
+        const targetEmps: any[] = [];
 
-        // Check if there's a day-specific assignment
-        const designatedEmpId = memberDayMap[dayNum.toString()] || memberDayMap[dayNum];
-        if (designatedEmpId && empMap.has(designatedEmpId)) {
-          targetEmp = empMap.get(designatedEmpId);
-        } else {
-          // Round-robin or pick first available assigned employee who doesn't have a fixed off on this day
-          for (const emp of validAssignedEmps) {
-            let isOff = false;
-            try {
-              if (emp.fixedDaySchedule) {
-                const sched = JSON.parse(emp.fixedDaySchedule);
-                const daySched = sched[dayNum.toString()] || sched[dayNum];
-                if (daySched?.type === 'OFF') isOff = true;
+        // 4a. Check member-specific assigned days (e.g. memberDayMap[empId] = [1, 5])
+        for (const emp of validAssignedEmps) {
+          const empDays = memberDayMap[emp.id];
+          if (Array.isArray(empDays) && empDays.includes(dayNum)) {
+            targetEmps.push(emp);
+          }
+        }
+
+        // 4b. Check day-keyed fallback
+        const dayConfig = memberDayMap[dayNum.toString()] || memberDayMap[dayNum];
+        if (dayConfig) {
+          if (Array.isArray(dayConfig)) {
+            for (const id of dayConfig) {
+              const emp = empMap.get(id);
+              if (emp && !targetEmps.some(te => te.id === emp.id)) {
+                targetEmps.push(emp);
               }
-              if (emp.fixedOffDays) {
-                const offs = JSON.parse(emp.fixedOffDays);
-                if (offs.includes(dayNum)) isOff = true;
-              }
-            } catch {}
-
-            if (!isOff) {
-              targetEmp = emp;
-              break;
+            }
+          } else if (typeof dayConfig === 'string') {
+            const emp = empMap.get(dayConfig);
+            if (emp && !targetEmps.some(te => te.id === emp.id)) {
+              targetEmps.push(emp);
             }
           }
         }
 
-        if (!targetEmp) {
-          targetEmp = validAssignedEmps[0];
+        // 4c. Fill up to requiredCount if needed
+        if (targetEmps.length === 0) {
+          for (const emp of validAssignedEmps) {
+            if (targetEmps.length >= requiredCount) break;
+            if (!targetEmps.some(te => te.id === emp.id)) {
+              targetEmps.push(emp);
+            }
+          }
+        } else if (targetEmps.length < requiredCount) {
+          for (const emp of validAssignedEmps) {
+            if (targetEmps.length >= requiredCount) break;
+            if (!targetEmps.some(te => te.id === emp.id)) {
+              targetEmps.push(emp);
+            }
+          }
         }
 
-        if (!targetEmp) continue;
-
-        const shiftPayload = {
-          employeeId: targetEmp.id,
-          date: shiftDate,
-          type: 'CUSTOM',
-          location: client.location || client.name,
-          customStart: client.startTime || '08:30',
-          customEnd: client.endTime || '17:00',
-          color: client.color || 'PINK',
-          notes: client.notes || null,
-          isManual: true,
-        };
-
-        await prisma.shift.upsert({
-          where: {
-            employeeId_date: {
+        // 4d. For each targetEmp, delete any existing shift on that day first, then create client shift
+        for (const targetEmp of targetEmps) {
+          // Clean up old entries on this day
+          await prisma.shift.deleteMany({
+            where: {
               employeeId: targetEmp.id,
-              date: shiftDate,
+              date: {
+                gte: dayStart,
+                lte: dayEnd,
+              },
             },
-          },
-          update: shiftPayload,
-          create: shiftPayload,
-        });
+          });
 
-        appliedCount++;
-        appliedShifts.push({
-          clientName: client.name,
-          employeeName: targetEmp.name,
-          date: shiftDate.toISOString(),
-          dayNum,
-        });
+          await prisma.shift.create({
+            data: {
+              employeeId: targetEmp.id,
+              date: dayStart,
+              type: 'CUSTOM',
+              location: client.location || client.name,
+              customStart: client.startTime || '08:30',
+              customEnd: client.endTime || '17:00',
+              color: client.color || 'PINK',
+              notes: client.notes || null,
+              isManual: true,
+            },
+          });
+
+          appliedCount++;
+          appliedShifts.push({
+            clientName: client.name,
+            employeeName: targetEmp.name,
+            date: shiftDate.toISOString(),
+            dayNum,
+          });
+        }
       }
     }
 

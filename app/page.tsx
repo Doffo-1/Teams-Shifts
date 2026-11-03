@@ -18,6 +18,8 @@ import {
   Download,
   Users,
   Plus,
+  Minus,
+  Search,
   Trash2,
   Wand2,
   X,
@@ -170,7 +172,7 @@ export default function Home() {
     monthlyWeek: number;
     days: number[];
     assignedEmployeeIds: string[];
-    memberDayMap: Record<string, string>;
+    memberDayMap: Record<string, any>;
     requiredMembersPerDay: number;
     notes: string;
     isActive: boolean;
@@ -183,7 +185,7 @@ export default function Home() {
     frequency: 'EVERY_OTHER_WEEK',
     weekParity: 'ODD',
     monthlyWeek: 1,
-    days: [3],
+    days: [1, 2, 3, 4, 5],
     assignedEmployeeIds: [],
     memberDayMap: {},
     requiredMembersPerDay: 1,
@@ -973,8 +975,34 @@ export default function Home() {
   // Client Management Handlers
   const openClientEditor = (client?: ClientData | null) => {
     setClientDropdownOpen(false);
+    setClientMemberSearch('');
     if (client) {
       setSelectedClientId(client.id);
+
+      let parsedMap: Record<string, any> = {};
+      try {
+        if (typeof client.memberDayMap === 'string') parsedMap = JSON.parse(client.memberDayMap);
+        else if (client.memberDayMap && typeof client.memberDayMap === 'object') parsedMap = { ...client.memberDayMap };
+      } catch {
+        parsedMap = {};
+      }
+
+      const clientDays = Array.isArray(client.days) ? client.days : [1, 2, 3, 4, 5];
+      const empIds = Array.isArray(client.assignedEmployeeIds) ? client.assignedEmployeeIds : [];
+
+      // Ensure each assigned employee has an array of scheduled days
+      for (const id of empIds) {
+        if (!Array.isArray(parsedMap[id])) {
+          const daysForEmp: number[] = [];
+          for (let d = 1; d <= 5; d++) {
+            if (parsedMap[d.toString()] === id || (Array.isArray(parsedMap[d.toString()]) && parsedMap[d.toString()].includes(id))) {
+              daysForEmp.push(d);
+            }
+          }
+          parsedMap[id] = daysForEmp.length > 0 ? daysForEmp : [...clientDays];
+        }
+      }
+
       setClientForm({
         id: client.id,
         name: client.name,
@@ -985,10 +1013,10 @@ export default function Home() {
         frequency: client.frequency || 'EVERY_OTHER_WEEK',
         weekParity: (client.weekParity as any) || 'ODD',
         monthlyWeek: client.monthlyWeek || 1,
-        days: Array.isArray(client.days) ? client.days : [3],
-        assignedEmployeeIds: Array.isArray(client.assignedEmployeeIds) ? client.assignedEmployeeIds : [],
-        memberDayMap: client.memberDayMap || {},
-        requiredMembersPerDay: client.requiredMembersPerDay || 1,
+        days: clientDays,
+        assignedEmployeeIds: empIds,
+        memberDayMap: parsedMap,
+        requiredMembersPerDay: client.requiredMembersPerDay && client.requiredMembersPerDay > 0 ? client.requiredMembersPerDay : 1,
         notes: client.notes || '',
         isActive: client.isActive !== false,
       });
@@ -1003,7 +1031,7 @@ export default function Home() {
         frequency: 'EVERY_OTHER_WEEK',
         weekParity: 'ODD',
         monthlyWeek: 1,
-        days: [3],
+        days: [1, 2, 3, 4, 5],
         assignedEmployeeIds: [],
         memberDayMap: {},
         requiredMembersPerDay: 1,
@@ -1012,6 +1040,60 @@ export default function Home() {
       });
     }
     setClientModalOpen(true);
+  };
+
+  const getClientMemberDays = (empId: string): number[] => {
+    const custom = clientForm.memberDayMap[empId];
+    if (Array.isArray(custom)) return custom;
+    return clientForm.days || [1, 2, 3, 4, 5];
+  };
+
+  const toggleClientMemberDay = (empId: string, dayNum: number) => {
+    const curDays = getClientMemberDays(empId);
+    const nextDays = curDays.includes(dayNum)
+      ? curDays.filter(d => d !== dayNum)
+      : [...curDays, dayNum].sort();
+    setClientForm({
+      ...clientForm,
+      memberDayMap: {
+        ...clientForm.memberDayMap,
+        [empId]: nextDays,
+      },
+    });
+  };
+
+  const setClientMemberDaysAll = (empId: string, days: number[]) => {
+    setClientForm({
+      ...clientForm,
+      memberDayMap: {
+        ...clientForm.memberDayMap,
+        [empId]: days,
+      },
+    });
+  };
+
+  const addMemberToClient = (empId: string) => {
+    if (clientForm.assignedEmployeeIds.includes(empId)) return;
+    setClientForm({
+      ...clientForm,
+      assignedEmployeeIds: [...clientForm.assignedEmployeeIds, empId],
+      memberDayMap: {
+        ...clientForm.memberDayMap,
+        [empId]: clientForm.days.length > 0 ? [...clientForm.days] : [1, 2, 3, 4, 5],
+      },
+    });
+    setClientMemberSearch('');
+  };
+
+  const removeMemberFromClient = (empId: string) => {
+    const nextIds = clientForm.assignedEmployeeIds.filter(id => id !== empId);
+    const nextMap = { ...clientForm.memberDayMap };
+    delete nextMap[empId];
+    setClientForm({
+      ...clientForm,
+      assignedEmployeeIds: nextIds,
+      memberDayMap: nextMap,
+    });
   };
 
   const saveClientForm = async () => {
@@ -1230,12 +1312,14 @@ export default function Home() {
 
     const cleanNotes = notes?.trim() ? notes.trim() : null;
 
-    // Optimistic UI Update
+    // Optimistic UI Update: remove any existing shifts for these employees on these dates first
     setShifts((prev) => {
-      const next = [...prev];
+      const next = prev.filter(
+        s => !(targetEmpIds.includes(s.employeeId) && datesToSave.some(d => isSameDay(new Date(s.date), d)))
+      );
       for (const empId of targetEmpIds) {
         for (const sDate of datesToSave) {
-          const newShift: Shift = {
+          next.push({
             id: 'temp-' + empId + sDate.getTime(),
             employeeId: empId,
             date: sDate.toISOString(),
@@ -1246,10 +1330,7 @@ export default function Home() {
             customEnd,
             notes: cleanNotes,
             color,
-          };
-          const idx = next.findIndex(s => s.employeeId === empId && isSameDay(new Date(s.date), sDate));
-          if (idx >= 0) next[idx] = newShift;
-          else next.push(newShift);
+          });
         }
       }
       return next;
@@ -2879,7 +2960,7 @@ export default function Home() {
                     <input
                       type="text"
                       className="input"
-                      placeholder="e.g. MWT, Acme Corp, Client X, Project Site"
+                      placeholder="e.g. Acme Corp, Client X, Project Site"
                       value={clientForm.name}
                       onChange={e => setClientForm({ ...clientForm, name: e.target.value })}
                       required
@@ -2891,7 +2972,7 @@ export default function Home() {
                     <input
                       type="text"
                       className="input"
-                      placeholder="e.g. MWT (Client Site) - leave empty to use Client Name"
+                      placeholder="e.g. Client Site - leave empty to use Client Name"
                       value={clientForm.location}
                       onChange={e => setClientForm({ ...clientForm, location: e.target.value })}
                     />
@@ -3169,172 +3250,411 @@ export default function Home() {
                       </div>
                     )}
                   </div>
+
+                  {/* Required Staff Per Scheduled Day */}
+                  <div style={{ background: 'rgba(15, 23, 42, 0.7)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '1rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                      <div>
+                        <label className="label" style={{ margin: 0 }}>Staff Required per Scheduled Day</label>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--slate-400)' }}>
+                          How many team members must be scheduled on this client each day
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', background: 'var(--slate-850)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '0.25rem 0.5rem' }}>
+                          <button
+                            type="button"
+                            className="staff-counter-btn"
+                            onClick={() => setClientForm({ ...clientForm, requiredMembersPerDay: Math.max(1, (clientForm.requiredMembersPerDay || 1) - 1) })}
+                            title="Decrease staff count"
+                          >
+                            <Minus size={14} />
+                          </button>
+                          <span style={{ fontSize: '1.15rem', fontWeight: 800, color: 'white', minWidth: 36, textAlign: 'center' }}>
+                            {clientForm.requiredMembersPerDay || 1}
+                          </span>
+                          <button
+                            type="button"
+                            className="staff-counter-btn"
+                            onClick={() => setClientForm({ ...clientForm, requiredMembersPerDay: (clientForm.requiredMembersPerDay || 1) + 1 })}
+                            title="Increase staff count"
+                          >
+                            <Plus size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                      {[1, 2, 3, 4].map(n => (
+                        <button
+                          key={n}
+                          type="button"
+                          onClick={() => setClientForm({ ...clientForm, requiredMembersPerDay: n })}
+                          style={{
+                            padding: '0.3rem 0.65rem',
+                            fontSize: '0.75rem',
+                            fontWeight: 600,
+                            borderRadius: 'var(--radius-sm)',
+                            background: (clientForm.requiredMembersPerDay || 1) === n ? 'rgba(99, 102, 241, 0.25)' : 'var(--slate-800)',
+                            border: `1px solid ${(clientForm.requiredMembersPerDay || 1) === n ? 'var(--primary)' : 'var(--slate-700)'}`,
+                            color: (clientForm.requiredMembersPerDay || 1) === n ? 'white' : 'var(--slate-400)',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {n} {n === 1 ? 'Person / day' : 'People / day'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               </div>
 
               {/* RIGHT COLUMN: Assigned Members & Forecast */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-                {/* Card 3: Assigned Members */}
+                {/* Card 3: Assigned Members (Add Solely via Searchbar & Set Weekly Days) */}
                 <div className="client-card">
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                       <Users size={18} style={{ color: 'var(--accent)' }} />
                       <h2 style={{ fontSize: '1rem', fontWeight: 700, color: 'white' }}>
-                        Assigned Team Members ({clientForm.assignedEmployeeIds.length}/{employees.length})
+                        Assigned Team Members ({clientForm.assignedEmployeeIds.length})
                       </h2>
                     </div>
-                    <div style={{ display: 'flex', gap: '0.4rem' }}>
+                    {clientForm.assignedEmployeeIds.length > 0 && (
                       <button
                         type="button"
-                        onClick={() => setClientForm({ ...clientForm, assignedEmployeeIds: employees.map(e => e.id) })}
-                        style={{ fontSize: '0.72rem', color: 'var(--primary)', background: 'none' }}
+                        onClick={() => setClientForm({ ...clientForm, assignedEmployeeIds: [], memberDayMap: {} })}
+                        style={{ fontSize: '0.75rem', color: '#f87171', background: 'none', cursor: 'pointer' }}
                       >
-                        Select All
+                        Remove All
                       </button>
-                      <span style={{ color: 'var(--slate-600)' }}>•</span>
-                      <button
-                        type="button"
-                        onClick={() => setClientForm({ ...clientForm, assignedEmployeeIds: [] })}
-                        style={{ fontSize: '0.72rem', color: 'var(--slate-400)', background: 'none' }}
-                      >
-                        Clear
-                      </button>
+                    )}
+                  </div>
+
+                  {/* Add Member Solely via Searchbar */}
+                  <div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--slate-400)', marginBottom: '0.45rem' }}>
+                      Add team members solely by typing in the search bar. Then toggle which days each member goes:
+                    </div>
+                    <div className="client-search-wrapper">
+                      <div style={{ position: 'relative' }}>
+                        <Search size={16} style={{ position: 'absolute', left: 12, top: 11, color: 'var(--slate-400)', pointerEvents: 'none' }} />
+                        <input
+                          type="text"
+                          className="input"
+                          placeholder="Search and add team member to client..."
+                          value={clientMemberSearch}
+                          onChange={e => setClientMemberSearch(e.target.value)}
+                          style={{ paddingLeft: '2.4rem', fontSize: '0.85rem' }}
+                        />
+                        {clientMemberSearch && (
+                          <button
+                            type="button"
+                            onClick={() => setClientMemberSearch('')}
+                            style={{ position: 'absolute', right: 10, top: 8, background: 'none', color: 'var(--slate-400)', cursor: 'pointer' }}
+                          >
+                            <X size={16} />
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Search Dropdown Results */}
+                      {clientMemberSearch.trim().length > 0 && (
+                        <div className="client-search-dropdown">
+                          {(() => {
+                            const unassigned = employees.filter(
+                              emp => !clientForm.assignedEmployeeIds.includes(emp.id) &&
+                                (emp.name.toLowerCase().includes(clientMemberSearch.toLowerCase()) ||
+                                 (emp.email && emp.email.toLowerCase().includes(clientMemberSearch.toLowerCase())))
+                            );
+                            if (unassigned.length === 0) {
+                              return (
+                                <div style={{ padding: '0.85rem', textAlign: 'center', fontSize: '0.8rem', color: 'var(--slate-400)' }}>
+                                  No matching unassigned team members found.
+                                </div>
+                              );
+                            }
+                            return unassigned.map(emp => (
+                              <div
+                                key={emp.id}
+                                className="client-search-item"
+                                onClick={() => addMemberToClient(emp.id)}
+                              >
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                                  <div
+                                    style={{
+                                      width: 28,
+                                      height: 28,
+                                      borderRadius: '50%',
+                                      background: 'linear-gradient(135deg, #6366f1, #a855f7)',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center',
+                                      fontWeight: 700,
+                                      fontSize: '0.75rem',
+                                      color: 'white',
+                                    }}
+                                  >
+                                    {emp.name.charAt(0).toUpperCase()}
+                                  </div>
+                                  <div>
+                                    <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'white' }}>{emp.name}</div>
+                                    {emp.email && <div style={{ fontSize: '0.7rem', color: 'var(--slate-400)' }}>{emp.email}</div>}
+                                  </div>
+                                </div>
+                                <button
+                                  type="button"
+                                  className="btn btn-primary"
+                                  style={{ padding: '0.25rem 0.65rem', fontSize: '0.75rem' }}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    addMemberToClient(emp.id);
+                                  }}
+                                >
+                                  <Plus size={14} /> Add
+                                </button>
+                              </div>
+                            ));
+                          })()}
+                        </div>
+                      )}
                     </div>
                   </div>
 
-                  <div style={{ fontSize: '0.8rem', color: 'var(--slate-400)' }}>
-                    Only checked team members will be scheduled for this client.
-                  </div>
+                  {/* Members list with Mon-Fri toggle pills */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem', maxHeight: 380, overflowY: 'auto' }}>
+                    {clientForm.assignedEmployeeIds.length === 0 ? (
+                      <div style={{ padding: '2rem 1rem', textAlign: 'center', background: 'rgba(15, 23, 42, 0.4)', borderRadius: 'var(--radius)', border: '1px dashed var(--border)' }}>
+                        <Users size={32} style={{ color: 'var(--slate-500)', margin: '0 auto 0.5rem auto' }} />
+                        <div style={{ fontWeight: 600, color: 'white', fontSize: '0.9rem' }}>No team members assigned yet</div>
+                        <div style={{ fontSize: '0.78rem', color: 'var(--slate-400)', marginTop: 4 }}>
+                          Use the search bar above to find and add team members to this client.
+                        </div>
+                      </div>
+                    ) : (
+                      clientForm.assignedEmployeeIds.map(empId => {
+                        const emp = employees.find(e => e.id === empId);
+                        if (!emp) return null;
+                        const memberDays = getClientMemberDays(emp.id);
+                        const dayLabels = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+                        const scheduledDaysText = memberDays.length > 0 ? memberDays.map(d => dayLabels[d]).join(', ') : 'None';
 
-                  {/* Search box if > 4 members */}
-                  {employees.length > 4 && (
-                    <input
-                      type="text"
-                      className="input"
-                      placeholder="Filter team members..."
-                      value={clientMemberSearch}
-                      onChange={e => setClientMemberSearch(e.target.value)}
-                      style={{ padding: '0.4rem 0.75rem', fontSize: '0.82rem' }}
-                    />
-                  )}
-
-                  {/* Members list */}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: 260, overflowY: 'auto' }}>
-                    {employees
-                      .filter(emp => !clientMemberSearch || emp.name.toLowerCase().includes(clientMemberSearch.toLowerCase()))
-                      .map(emp => {
-                        const isAssigned = clientForm.assignedEmployeeIds.includes(emp.id);
                         return (
-                          <div
-                            key={emp.id}
-                            className={`member-assign-item ${isAssigned ? 'selected' : ''}`}
-                            onClick={() => {
-                              const next = isAssigned
-                                ? clientForm.assignedEmployeeIds.filter(id => id !== emp.id)
-                                : [...clientForm.assignedEmployeeIds, emp.id];
-                              setClientForm({ ...clientForm, assignedEmployeeIds: next });
-                            }}
-                          >
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-                              <input
-                                type="checkbox"
-                                checked={isAssigned}
-                                onChange={() => {}}
-                                style={{ accentColor: 'var(--primary)', cursor: 'pointer' }}
-                              />
-                              <div
-                                style={{
-                                  width: 26,
-                                  height: 26,
-                                  borderRadius: '50%',
-                                  background: 'linear-gradient(135deg, #6366f1, #a855f7)',
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'center',
-                                  fontWeight: 700,
-                                  fontSize: '0.75rem',
-                                  color: 'white',
-                                }}
-                              >
-                                {emp.name.charAt(0).toUpperCase()}
+                          <div key={emp.id} className="client-member-card">
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                                <div
+                                  style={{
+                                    width: 32,
+                                    height: 32,
+                                    borderRadius: '50%',
+                                    background: 'linear-gradient(135deg, #6366f1, #a855f7)',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    fontWeight: 700,
+                                    fontSize: '0.8rem',
+                                    color: 'white',
+                                  }}
+                                >
+                                  {emp.name.charAt(0).toUpperCase()}
+                                </div>
+                                <div>
+                                  <div style={{ fontSize: '0.88rem', fontWeight: 700, color: 'white' }}>{emp.name}</div>
+                                  <div style={{ fontSize: '0.72rem', color: 'var(--slate-400)' }}>
+                                    {emp.group || 'Team Member'} {emp.email ? `• ${emp.email}` : ''}
+                                  </div>
+                                </div>
                               </div>
-                              <div>
-                                <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'white' }}>{emp.name}</div>
-                                {emp.email && <div style={{ fontSize: '0.7rem', color: 'var(--slate-400)' }}>{emp.email}</div>}
+
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <span
+                                  style={{
+                                    fontSize: '0.72rem',
+                                    fontWeight: 700,
+                                    padding: '0.2rem 0.55rem',
+                                    borderRadius: 9999,
+                                    background: memberDays.length > 0 ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                                    color: memberDays.length > 0 ? '#34d399' : '#f87171',
+                                    border: `1px solid ${memberDays.length > 0 ? 'rgba(16, 185, 129, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
+                                  }}
+                                >
+                                  {memberDays.length} {memberDays.length === 1 ? 'day/wk' : 'days/wk'} ({scheduledDaysText})
+                                </span>
+                                <button
+                                  type="button"
+                                  className="action-btn delete"
+                                  onClick={() => removeMemberFromClient(emp.id)}
+                                  title={`Remove ${emp.name} from client`}
+                                  style={{ opacity: 1, padding: '0.35rem', color: 'var(--slate-400)' }}
+                                >
+                                  <Trash2 size={16} />
+                                </button>
                               </div>
                             </div>
-                            <span style={{ fontSize: '0.72rem', color: 'var(--slate-400)', background: 'rgba(255,255,255,0.06)', padding: '0.15rem 0.4rem', borderRadius: 4 }}>
-                              {emp.group || 'Member'}
-                            </span>
+
+                            {/* Day Selection Row for this Member */}
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', background: 'rgba(0,0,0,0.25)', padding: '0.45rem 0.65rem', borderRadius: 'var(--radius)' }}>
+                              <span style={{ fontSize: '0.75rem', color: 'var(--slate-400)', fontWeight: 600 }}>
+                                Days on Client:
+                              </span>
+                              <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+                                {[
+                                  { day: 1, short: 'Mon' },
+                                  { day: 2, short: 'Tue' },
+                                  { day: 3, short: 'Wed' },
+                                  { day: 4, short: 'Thu' },
+                                  { day: 5, short: 'Fri' },
+                                ].map(d => {
+                                  const isDayActive = memberDays.includes(d.day);
+                                  return (
+                                    <button
+                                      key={d.day}
+                                      type="button"
+                                      className={`member-day-pill ${isDayActive ? 'active' : ''}`}
+                                      onClick={() => toggleClientMemberDay(emp.id, d.day)}
+                                    >
+                                      {d.short} {isDayActive ? '✓' : ''}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                              <div style={{ display: 'flex', gap: '0.3rem' }}>
+                                <button
+                                  type="button"
+                                  onClick={() => setClientMemberDaysAll(emp.id, [1, 2, 3, 4, 5])}
+                                  style={{ fontSize: '0.7rem', color: 'var(--primary)', background: 'none', cursor: 'pointer' }}
+                                >
+                                  All
+                                </button>
+                                <span style={{ color: 'var(--slate-600)', fontSize: '0.7rem' }}>•</span>
+                                <button
+                                  type="button"
+                                  onClick={() => setClientMemberDaysAll(emp.id, [])}
+                                  style={{ fontSize: '0.7rem', color: 'var(--slate-500)', background: 'none', cursor: 'pointer' }}
+                                >
+                                  None
+                                </button>
+                              </div>
+                            </div>
                           </div>
                         );
-                      })}
+                      })
+                    )}
                   </div>
                 </div>
 
-                {/* Card 4: Day-by-Day Specific Member Designation */}
-                {clientForm.days.length > 0 && clientForm.assignedEmployeeIds.length > 0 && (
-                  <div className="client-card">
+                {/* Card 4: Integrated Day-by-Day Coverage & Member Overview */}
+                <div className="client-card">
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                       <CalendarCheck size={18} style={{ color: 'var(--success)' }} />
-                      <h2 style={{ fontSize: '1rem', fontWeight: 700, color: 'white' }}>Day-by-Day Assignment Rules</h2>
+                      <h2 style={{ fontSize: '1rem', fontWeight: 700, color: 'white' }}>
+                        Day-by-Day Coverage & Member Overview
+                      </h2>
                     </div>
-                    <div style={{ fontSize: '0.8rem', color: 'var(--slate-400)' }}>
-                      Designate a specific assigned person for each day, or choose Auto-Assign from the assigned pool:
-                    </div>
-
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                      {clientForm.days.map(d => {
-                        const dayNames = ['', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
-                        const selectedEmpId = clientForm.memberDayMap[d.toString()] || '';
-                        return (
-                          <div
-                            key={d}
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'space-between',
-                              gap: '0.75rem',
-                              padding: '0.5rem 0.75rem',
-                              background: 'rgba(15, 23, 42, 0.6)',
-                              borderRadius: 'var(--radius)',
-                              border: '1px solid var(--border)',
-                            }}
-                          >
-                            <span style={{ fontWeight: 600, fontSize: '0.85rem', color: 'white', minWidth: 90 }}>
-                              {dayNames[d]}
-                            </span>
-                            <select
-                              className="input"
-                              style={{ flex: 1, padding: '0.35rem 0.6rem', fontSize: '0.82rem' }}
-                              value={selectedEmpId}
-                              onChange={e => {
-                                const nextMap = { ...clientForm.memberDayMap };
-                                if (e.target.value) {
-                                  nextMap[d.toString()] = e.target.value;
-                                } else {
-                                  delete nextMap[d.toString()];
-                                }
-                                setClientForm({ ...clientForm, memberDayMap: nextMap });
-                              }}
-                            >
-                              <option value="">Any available assigned member (Auto-assign / rotate)</option>
-                              {clientForm.assignedEmployeeIds.map(empId => {
-                                const emp = employees.find(e => e.id === empId);
-                                if (!emp) return null;
-                                return (
-                                  <option key={emp.id} value={emp.id}>
-                                    Designate: {emp.name}
-                                  </option>
-                                );
-                              })}
-                            </select>
-                          </div>
-                        );
-                      })}
-                    </div>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--slate-400)' }}>
+                      Target: {clientForm.requiredMembersPerDay || 1} staff per scheduled day
+                    </span>
                   </div>
-                )}
+
+                  <div style={{ fontSize: '0.8rem', color: 'var(--slate-400)' }}>
+                    Weekly breakdown showing which assigned members will be on site for each weekday:
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                    {[
+                      { day: 1, name: 'Monday', short: 'Mon' },
+                      { day: 2, name: 'Tuesday', short: 'Tue' },
+                      { day: 3, name: 'Wednesday', short: 'Wed' },
+                      { day: 4, name: 'Thursday', short: 'Thu' },
+                      { day: 5, name: 'Friday', short: 'Fri' },
+                    ].map(d => {
+                      const isClientActiveDay = clientForm.days.includes(d.day);
+                      const required = isClientActiveDay ? (clientForm.requiredMembersPerDay || 1) : 0;
+                      const assignedOnThisDay = clientForm.assignedEmployeeIds
+                        .map(id => employees.find(e => e.id === id))
+                        .filter(Boolean)
+                        .filter(emp => getClientMemberDays(emp!.id).includes(d.day));
+
+                      const count = assignedOnThisDay.length;
+                      let cardClass = 'empty';
+                      if (!isClientActiveDay) cardClass = 'inactive';
+                      else if (count >= required && required > 0) cardClass = 'complete';
+                      else if (count > 0) cardClass = 'needed';
+
+                      return (
+                        <div key={d.day} className={`day-overview-card ${cardClass}`}>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                              <span style={{ fontWeight: 700, fontSize: '0.88rem', color: isClientActiveDay ? 'white' : 'var(--slate-500)', minWidth: 80 }}>
+                                {d.name}
+                              </span>
+                              <span style={{ fontSize: '0.75rem', color: isClientActiveDay ? 'var(--slate-400)' : 'var(--slate-600)' }}>
+                                {isClientActiveDay ? `Required: ${required} staff` : 'Not scheduled for this client'}
+                              </span>
+                            </div>
+
+                            {isClientActiveDay && (
+                              <span
+                                style={{
+                                  fontSize: '0.72rem',
+                                  fontWeight: 700,
+                                  padding: '0.2rem 0.55rem',
+                                  borderRadius: 9999,
+                                  background: count >= required ? 'rgba(16, 185, 129, 0.2)' : count > 0 ? 'rgba(245, 158, 11, 0.2)' : 'rgba(239, 68, 68, 0.15)',
+                                  color: count >= required ? '#34d399' : count > 0 ? '#fbbf24' : '#f87171',
+                                  border: `1px solid ${count >= required ? 'rgba(16, 185, 129, 0.4)' : count > 0 ? 'rgba(245, 158, 11, 0.4)' : 'rgba(239, 68, 68, 0.3)'}`,
+                                }}
+                              >
+                                {count >= required ? `✓ ${count}/${required} Complete` : count > 0 ? `⚠ ${count}/${required} (Needs ${required - count} more)` : `✕ 0/${required} Unstaffed`}
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Assigned members list for this day */}
+                          {isClientActiveDay && (
+                            <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', alignItems: 'center', marginTop: '0.2rem' }}>
+                              {assignedOnThisDay.length === 0 ? (
+                                <span style={{ fontSize: '0.75rem', color: '#f87171', fontStyle: 'italic' }}>
+                                  No team member selected for {d.name}. Toggle "{d.short}" on a member card above.
+                                </span>
+                              ) : (
+                                assignedOnThisDay.map(emp => (
+                                  <div
+                                    key={emp!.id}
+                                    style={{
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '0.35rem',
+                                      background: 'rgba(99, 102, 241, 0.18)',
+                                      border: '1px solid rgba(99, 102, 241, 0.4)',
+                                      borderRadius: 9999,
+                                      padding: '0.15rem 0.55rem',
+                                      fontSize: '0.75rem',
+                                      color: 'white',
+                                      fontWeight: 600,
+                                    }}
+                                  >
+                                    <span>{emp!.name}</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleClientMemberDay(emp!.id, d.day)}
+                                      title={`Remove ${emp!.name} from ${d.name}`}
+                                      style={{ background: 'none', color: 'var(--slate-400)', cursor: 'pointer', padding: 0, display: 'flex' }}
+                                    >
+                                      <X size={12} />
+                                    </button>
+                                  </div>
+                                ))
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
 
                 {/* Card 5: Live 6-Week Forecast Preview */}
                 <div className="client-card">
