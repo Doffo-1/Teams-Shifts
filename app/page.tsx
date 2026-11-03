@@ -1357,7 +1357,7 @@ export default function Home() {
 
     return (
       <div style={{ overflowX: 'auto', marginBottom: '2.5rem' }} key={groupKey}>
-        <table className="schedule-table">
+        <table className="schedule-table schedule-grid-table">
           <thead>
             <tr>
               <th className="member-cell">
@@ -1398,7 +1398,7 @@ export default function Home() {
                 </div>
               </th>
               {weekDays.map(day => (
-                <th key={day.toISOString()} style={{ textAlign: 'center' }} suppressHydrationWarning>
+                <th key={day.toISOString()} className="day-col-header" style={{ textAlign: 'center' }} suppressHydrationWarning>
                   <div style={{ fontSize: '0.75rem', textTransform: 'uppercase', color: 'var(--slate-400)', fontWeight: 700, letterSpacing: '0.05em' }} suppressHydrationWarning>
                     {format(day, 'EEEE')}
                   </div>
@@ -1492,7 +1492,7 @@ export default function Home() {
                     }
 
                     return (
-                      <td key={day.toISOString()}>
+                      <td key={day.toISOString()} className="day-col-cell">
                         <button className={shiftClass} onClick={() => openShiftModal(emp.id, day, shift)}>
                           {shift?.isManual && <div className="manual-pin" title="Manual shift override" />}
                           {shift && shift.type !== 'OFF' ? (
@@ -1501,22 +1501,29 @@ export default function Home() {
                                 {getShiftTimeText(shift)}
                               </span>
                               {shift.type !== 'SICK' && shift.type !== 'VACATION' && (
-                                <span className={`loc-badge ${shift.location === 'OFFICE' ? 'loc-office' : shift.location === 'HOME' ? 'loc-home' : 'loc-custom'}`}>
+                                <span
+                                  className={`loc-badge ${shift.location === 'OFFICE' ? 'loc-office' : shift.location === 'HOME' ? 'loc-home' : 'loc-custom'}`}
+                                  title={shift.location === 'OFFICE' ? 'Office' : shift.location === 'HOME' ? 'Home' : (shift.location || '')}
+                                >
                                   <div className="loc-dot" />
                                   {shift.location === 'OFFICE' ? (
                                     <>
-                                      <Building size={11} /> Office
+                                      <Building size={11} style={{ flexShrink: 0 }} /> <span className="loc-text">Office</span>
                                     </>
                                   ) : shift.location === 'HOME' ? (
                                     <>
-                                      <HomeIcon size={11} /> Home
+                                      <HomeIcon size={11} style={{ flexShrink: 0 }} /> <span className="loc-text">Home</span>
                                     </>
                                   ) : (
-                                    shift.location
+                                    <span className="loc-text">{shift.location}</span>
                                   )}
                                 </span>
                               )}
-                              {shift.notes && <span className="shift-notes">{shift.notes}</span>}
+                              {shift.notes && (
+                                <span className="shift-notes" title={shift.notes}>
+                                  {shift.notes}
+                                </span>
+                              )}
                             </>
                           ) : (
                             <span style={{ color: 'var(--slate-500)', fontSize: '0.85rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
