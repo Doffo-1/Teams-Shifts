@@ -384,6 +384,7 @@ export default function Home() {
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
   const [applyState, setApplyState] = useState<ApplyState | null>(null);
   const [isUpdatingModal, setIsUpdatingModal] = useState(false);
+  const [isModalRelaunched, setIsModalRelaunched] = useState(false);
   const [selectedModalAssetType, setSelectedModalAssetType] = useState<'installer'>('installer');
   const [localModalLogs, setLocalModalLogs] = useState<ApplyLog[]>([]);
   const modalTerminalRef = useRef<HTMLDivElement>(null);
@@ -550,6 +551,18 @@ export default function Home() {
     return () => clearInterval(timer);
   }, [applyState?.status, isUpdatingModal]);
 
+  // Attempt clean window close as soon as restarting begins
+  useEffect(() => {
+    if (applyState?.status === 'restarting') {
+      const closeTimer = setTimeout(() => {
+        try {
+          window.close();
+        } catch {}
+      }, 1600);
+      return () => clearTimeout(closeTimer);
+    }
+  }, [applyState?.status]);
+
   // While restarting, periodically ping the server to detect when it has relaunched
   useEffect(() => {
     let reconnectTimer: NodeJS.Timeout;
@@ -559,7 +572,10 @@ export default function Home() {
           const res = await fetch('/api/version?t=' + Date.now());
           if (res.ok) {
             clearInterval(reconnectTimer);
-            window.location.reload();
+            try {
+              window.close();
+            } catch {}
+            setIsModalRelaunched(true);
           }
         } catch {
           // Still updating/restarting
@@ -608,8 +624,8 @@ export default function Home() {
     } else if (applyState.status === 'restarting') {
       modalStep = 4;
       modalMasterProgress = 100;
-      modalStepTitle = 'Step 4 of 4: Installing & Restarting Teams Shifts';
-      modalStepDetail = 'Setup is silently installing files and will relaunch Teams Shifts automatically in a few seconds.';
+      modalStepTitle = 'Step 4 of 4: Installing Update & Relaunching';
+      modalStepDetail = 'Closing this window for update. Teams Shifts will reopen automatically in a few seconds.';
     } else if (applyState.status === 'error') {
       modalStepTitle = 'Update Failed';
       modalStepDetail = applyState.error || 'An error occurred during update';
@@ -4517,7 +4533,35 @@ export default function Home() {
               {versionTab === 'overview' && (
                 <div>
                     {/* If Update in Progress: Show Dedicated In-App Update Tracking Card */}
-                    {isModalUpdatingActive ? (
+                    {isModalRelaunched ? (
+                      <div className="update-screen-card" style={{ textAlign: 'center', padding: '2.5rem 1.5rem' }}>
+                        <div style={{ width: 56, height: 56, borderRadius: '50%', background: 'rgba(52, 211, 153, 0.15)', border: '1px solid rgba(52, 211, 153, 0.4)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: '#34d399', marginBottom: '1rem' }}>
+                          <CheckCircle2 size={32} />
+                        </div>
+                        <h3 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'white', marginBottom: '0.4rem' }}>Update Completed Successfully!</h3>
+                        <p style={{ color: 'var(--slate-300)', fontSize: '0.85rem', marginBottom: '1.5rem', maxWidth: 460, margin: '0 auto 1.5rem', lineHeight: 1.5 }}>
+                          Teams Shifts has been updated and reopened in your desktop app window. You can safely close this window.
+                        </p>
+                        <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+                          <button
+                            type="button"
+                            className="btn btn-primary"
+                            onClick={() => window.close()}
+                            style={{ padding: '0.6rem 1.5rem', fontWeight: 700 }}
+                          >
+                            Close Window
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            onClick={() => { setIsModalRelaunched(false); setShowVersionModal(false); window.location.reload(); }}
+                            style={{ padding: '0.6rem 1.25rem' }}
+                          >
+                            Reload Here Instead
+                          </button>
+                        </div>
+                      </div>
+                    ) : isModalUpdatingActive ? (
                       <div className="update-screen-card">
                         {/* Status Top Row */}
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.85rem' }}>

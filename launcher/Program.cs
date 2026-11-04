@@ -630,6 +630,9 @@ namespace TeamsShiftsLauncher
                     browserProcess = null;
                 }
 
+                // Terminate any remaining browser processes running with our profile directory
+                KillAppBrowserProcesses();
+
                 // 3. Terminate the background Node server
                 if (nodeProcess != null)
                 {
@@ -714,6 +717,26 @@ namespace TeamsShiftsLauncher
                         }
                     }
                     catch { }
+                }
+            }
+            catch { }
+        }
+
+        private static void KillAppBrowserProcesses()
+        {
+            try
+            {
+                ProcessStartInfo psi = new ProcessStartInfo
+                {
+                    FileName = "powershell.exe",
+                    Arguments = "-NoProfile -ExecutionPolicy Bypass -Command \"Get-CimInstance Win32_Process -Filter 'Name = ''msedge.exe'' or Name = ''chrome.exe''' -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*TeamsShifts*profile*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }\"",
+                    CreateNoWindow = true,
+                    WindowStyle = ProcessWindowStyle.Hidden,
+                    UseShellExecute = false
+                };
+                using (Process p = Process.Start(psi))
+                {
+                    if (p != null) p.WaitForExit(3000);
                 }
             }
             catch { }

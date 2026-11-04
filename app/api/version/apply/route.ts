@@ -194,7 +194,8 @@ export async function POST(request: Request) {
           ':: 1. Allow the HTTP response to be delivered to the client browser UI',
           'timeout /t 2 /nobreak >nul',
           '',
-          ':: 2. Terminate running TeamsShifts and node instances cleanly',
+          ':: 2. Terminate running Teams Shifts app window, launcher, and node instances cleanly',
+          'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process -Filter \'Name = \'\'msedge.exe\'\' or Name = \'\'chrome.exe\'\'\' -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like \'*TeamsShifts*profile*\' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }" >nul 2>&1',
           'taskkill /F /IM TeamsShifts.exe >nul 2>&1',
           'taskkill /F /IM node.exe >nul 2>&1',
           'timeout /t 1 /nobreak >nul',
@@ -229,9 +230,9 @@ export async function POST(request: Request) {
           globalForApply.applyState.step = 4;
           globalForApply.applyState.progress = 100;
           globalForApply.applyState.message = 'Restarting Teams Shifts now...';
-          globalForApply.applyState.detail = 'Silent setup is updating files and will relaunch Teams Shifts automatically in a few seconds.';
+          globalForApply.applyState.detail = 'Closing window and updating files. Teams Shifts will relaunch automatically in a few seconds.';
         }
-        addLog('Teams Shifts is closing down for silent setup. Relaunching automatically...', 'info');
+        addLog('Closing existing Teams Shifts window for silent setup. Relaunching automatically...', 'info');
 
         // Launch decoupled via Windows Task Scheduler so it runs completely outside any Job Object
         let launched = false;

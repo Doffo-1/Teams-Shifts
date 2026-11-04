@@ -81,6 +81,7 @@ export default function VersionPage() {
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
   const [applyState, setApplyState] = useState<ApplyState | null>(null);
   const [isUpdating, setIsUpdating] = useState(false);
+  const [isRelaunched, setIsRelaunched] = useState(false);
   const [selectedAssetType, setSelectedAssetType] = useState<'installer'>('installer');
   const [localLogs, setLocalLogs] = useState<ApplyLog[]>([]);
 
@@ -283,6 +284,18 @@ export default function VersionPage() {
     return () => clearInterval(timer);
   }, [applyState?.status, isUpdating]);
 
+  // Attempt clean window close as soon as restarting begins
+  useEffect(() => {
+    if (applyState?.status === 'restarting') {
+      const closeTimer = setTimeout(() => {
+        try {
+          window.close();
+        } catch {}
+      }, 1600);
+      return () => clearTimeout(closeTimer);
+    }
+  }, [applyState?.status]);
+
   // While restarting, periodically ping the server to detect when it has relaunched
   useEffect(() => {
     let reconnectTimer: NodeJS.Timeout;
@@ -292,7 +305,10 @@ export default function VersionPage() {
           const res = await fetch('/api/version?t=' + Date.now());
           if (res.ok) {
             clearInterval(reconnectTimer);
-            window.location.reload();
+            try {
+              window.close();
+            } catch {}
+            setIsRelaunched(true);
           }
         } catch {
           // Still updating/restarting
@@ -341,8 +357,8 @@ export default function VersionPage() {
     } else if (applyState.status === 'restarting') {
       currentStep = 4;
       masterProgress = 100;
-      currentStepTitle = 'Step 4 of 4: Installing & Restarting Teams Shifts';
-      currentStepDetail = 'Setup is silently installing files and will relaunch Teams Shifts automatically in a few seconds.';
+      currentStepTitle = 'Step 4 of 4: Installing Update & Relaunching';
+      currentStepDetail = 'Closing this window for update. Teams Shifts will reopen automatically in a few seconds.';
     } else if (applyState.status === 'error') {
       currentStepTitle = 'Update Failed';
       currentStepDetail = applyState.error || 'An error occurred during update';
@@ -428,7 +444,35 @@ export default function VersionPage() {
           {versionTab === 'overview' && (
             <div>
               {/* DEDICATED IN-APP UPDATE PROGRESS SCREEN */}
-              {isUpdatingActive ? (
+              {isRelaunched ? (
+                <div className="update-screen-card" style={{ textAlign: 'center', padding: '2.5rem 1.5rem' }}>
+                  <div style={{ width: 56, height: 56, borderRadius: '50%', background: 'rgba(52, 211, 153, 0.15)', border: '1px solid rgba(52, 211, 153, 0.4)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: '#34d399', marginBottom: '1rem' }}>
+                    <CheckCircle2 size={32} />
+                  </div>
+                  <h3 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'white', marginBottom: '0.4rem' }}>Update Completed Successfully!</h3>
+                  <p style={{ color: 'var(--slate-300)', fontSize: '0.85rem', marginBottom: '1.5rem', maxWidth: 460, margin: '0 auto 1.5rem', lineHeight: 1.5 }}>
+                    Teams Shifts has been updated and reopened in your desktop app window. You can safely close this window.
+                  </p>
+                  <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={() => window.close()}
+                      style={{ padding: '0.6rem 1.5rem', fontWeight: 700 }}
+                    >
+                      Close Window
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => window.location.reload()}
+                      style={{ padding: '0.6rem 1.25rem' }}
+                    >
+                      Reload Here Instead
+                    </button>
+                  </div>
+                </div>
+              ) : isUpdatingActive ? (
                 <div className="update-screen-card">
                   {/* Status Top Row */}
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.85rem' }}>
