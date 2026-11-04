@@ -269,7 +269,7 @@ export async function POST(req: Request) {
           }
         }
         // If DEFAULT group has zero employees, do not keep it around
-        const hasDefaultEmployees = teamObj?.employees.some(e => !e.group || e.group === 'DEFAULT');
+        const hasDefaultEmployees = teamObj?.employees.some((e: { group: string | null }) => !e.group || e.group === 'DEFAULT');
         if (!hasDefaultEmployees && existingGroups.some(g => g.id === 'DEFAULT')) {
           existingGroups = existingGroups.filter(g => g.id !== 'DEFAULT');
         }

@@ -4554,7 +4554,7 @@ export default function Home() {
                           <button
                             type="button"
                             className="btn btn-secondary"
-                            onClick={() => { setIsModalRelaunched(false); setShowVersionModal(false); window.location.reload(); }}
+                            onClick={() => { setIsModalRelaunched(false); setVersionModalOpen(false); window.location.reload(); }}
                             style={{ padding: '0.6rem 1.25rem' }}
                           >
                             Reload Here Instead

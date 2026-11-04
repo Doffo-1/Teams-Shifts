@@ -97,7 +97,7 @@ export async function DELETE(req: Request) {
           where: { teamId },
           select: { id: true },
         });
-        employeesWhere = { employeeId: { in: teamEmps.map(e => e.id) } };
+        employeesWhere = { employeeId: { in: teamEmps.map((e: { id: string }) => e.id) } };
       }
 
       const res = await prisma.shift.deleteMany({
