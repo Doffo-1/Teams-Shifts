@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { DEFAULT_GITHUB_REPO } from '@/lib/version';
+import { APP_VERSION, DEFAULT_GITHUB_REPO } from '@/lib/version';
 import { isAppInstalled } from '@/lib/edition';
 
 interface DownloadState {
@@ -57,6 +57,27 @@ function formatBytes(bytes: number): string {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 }
 
+function parseSemver(v: string): number[] {
+  const cleaned = v.trim().replace(/^v/i, '').split('-')[0];
+  const parts = cleaned.split('.').map(p => {
+    const num = parseInt(p, 10);
+    return isNaN(num) ? 0 : num;
+  });
+  while (parts.length < 3) parts.push(0);
+  return parts;
+}
+
+function isNewerVersion(latest: string, current: string): boolean {
+  const [lMajor, lMinor, lPatch] = parseSemver(latest);
+  const [cMajor, cMinor, cPatch] = parseSemver(current);
+
+  if (lMajor > cMajor) return true;
+  if (lMajor < cMajor) return false;
+  if (lMinor > cMinor) return true;
+  if (lMinor < cMinor) return false;
+  return lPatch > cPatch;
+}
+
 // GET: Check download status or stream downloaded file to browser
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -67,8 +88,17 @@ export async function GET(request: Request) {
 
   // Check if a completed file already exists on disk if state is idle
   if (state.status === 'idle') {
+    const metaPath = path.join(updatesDir, 'download-info.json');
     const defaultSetup = path.join(updatesDir, 'TeamsShifts-Setup.exe');
-    if (fs.existsSync(defaultSetup)) {
+
+    let meta: any = null;
+    if (fs.existsSync(metaPath)) {
+      try {
+        meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+      } catch {}
+    }
+
+    if (meta && meta.completed && meta.version && isNewerVersion(meta.version, APP_VERSION) && fs.existsSync(defaultSetup)) {
       const stats = fs.statSync(defaultSetup);
       if (stats.size > 10 * 1024 * 1024) {
         state.status = 'completed';
@@ -76,9 +106,16 @@ export async function GET(request: Request) {
         state.downloadedBytes = stats.size;
         state.totalBytes = stats.size;
         state.fileName = 'TeamsShifts-Setup.exe';
+        state.version = meta.version;
         state.filePath = defaultSetup;
         state.assetType = 'installer';
       }
+    } else if (fs.existsSync(defaultSetup)) {
+      // File on disk is from an older or current version, clean it up
+      try {
+        fs.unlinkSync(defaultSetup);
+        if (fs.existsSync(metaPath)) fs.unlinkSync(metaPath);
+      } catch {}
     }
   }
 
@@ -255,7 +292,18 @@ export async function POST(request: Request) {
           globalForDownload.downloadState.totalBytes = received;
           globalForDownload.downloadState.speed = 'Finished';
           globalForDownload.downloadState.filePath = targetFilePath;
+          globalForDownload.downloadState.version = version;
         }
+
+        try {
+          const metaPath = path.join(updatesDir, 'download-info.json');
+          fs.writeFileSync(metaPath, JSON.stringify({
+            version,
+            completed: true,
+            timestamp: Date.now(),
+            filePath: targetFilePath,
+          }), 'utf8');
+        } catch {}
       } catch (err: any) {
         if (controller.signal.aborted) {
           if (globalForDownload.downloadState) {
@@ -293,6 +341,13 @@ export async function DELETE() {
       globalForDownload.abortController.abort();
     } catch {}
   }
+  const updatesDir = getUpdatesDir();
+  try {
+    const metaPath = path.join(updatesDir, 'download-info.json');
+    if (fs.existsSync(metaPath)) fs.unlinkSync(metaPath);
+    const defaultSetup = path.join(updatesDir, 'TeamsShifts-Setup.exe');
+    if (fs.existsSync(defaultSetup)) fs.unlinkSync(defaultSetup);
+  } catch {}
   globalForDownload.downloadState = {
     status: 'idle',
     progress: 0,

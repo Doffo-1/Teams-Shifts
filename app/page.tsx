@@ -494,7 +494,8 @@ export default function Home() {
   const triggerOneClickUpdateModal = (assetType: 'installer' | 'portable' = 'installer') => {
     setSelectedModalAssetType('installer');
     setIsUpdatingModal(true);
-    if (downloadProgress?.status === 'completed' && downloadProgress?.assetType === 'installer') {
+    setApplyState(null);
+    if (downloadProgress?.status === 'completed') {
       applyUpdate('installer');
     } else {
       startInAppDownload('installer');
@@ -517,9 +518,7 @@ export default function Home() {
         const data = await pollDownloadStatus();
         if (data?.status === 'completed') {
           addModalLog(`Package ${data.fileName} downloaded successfully (${data.totalFormatted}).`, 'success');
-          if (isUpdatingModal && (!applyState || applyState.status === 'idle')) {
-            applyUpdate(data.assetType);
-          }
+          applyUpdate('installer');
           clearInterval(timer);
         } else if (data?.status === 'error') {
           addModalLog(`Download error: ${data.error}`, 'error');
@@ -528,7 +527,7 @@ export default function Home() {
       }, 500);
     }
     return () => clearInterval(timer);
-  }, [downloadProgress?.status, isUpdatingModal, applyState?.status]);
+  }, [downloadProgress?.status, isUpdatingModal]);
 
   // Polling loop while applying
   useEffect(() => {
@@ -550,6 +549,25 @@ export default function Home() {
     }
     return () => clearInterval(timer);
   }, [applyState?.status, isUpdatingModal]);
+
+  // While restarting, periodically ping the server to detect when it has relaunched
+  useEffect(() => {
+    let reconnectTimer: NodeJS.Timeout;
+    if (applyState?.status === 'restarting') {
+      reconnectTimer = setInterval(async () => {
+        try {
+          const res = await fetch('/api/version?t=' + Date.now());
+          if (res.ok) {
+            clearInterval(reconnectTimer);
+            window.location.reload();
+          }
+        } catch {
+          // Still updating/restarting
+        }
+      }, 1500);
+    }
+    return () => clearInterval(reconnectTimer);
+  }, [applyState?.status]);
 
   // Auto-scroll modal terminal
   useEffect(() => {
@@ -573,39 +591,34 @@ export default function Home() {
 
   if (downloadProgress?.status === 'downloading') {
     modalStep = 1;
-    modalMasterProgress = Math.round(modalDownloadPct * 0.4);
+    modalMasterProgress = Math.round(modalDownloadPct * 0.5);
     modalStepTitle = `Step 1 of 4: Downloading ${downloadProgress.fileName}`;
     modalStepDetail = `${downloadProgress.downloadedFormatted || '0 B'} / ${downloadProgress.totalFormatted || '...'} • ${downloadProgress.speed || 'Downloading...'}`;
   } else if (applyState && applyState.status !== 'idle') {
-    if (applyState.status === 'extracting') {
+    if (applyState.status === 'preparing' || applyState.status === 'verifying') {
       modalStep = 2;
-      modalMasterProgress = 40 + Math.round((applyState.progress / 100) * 25);
-      modalStepTitle = 'Step 2 of 4: Unpacking Application Archive';
-      modalStepDetail = applyState.detail || 'Extracting binaries and Next.js bundle to temporary staging area';
-    } else if (applyState.status === 'verifying') {
-      modalStep = 3;
-      modalMasterProgress = 65 + Math.round((applyState.progress / 100) * 15);
-      modalStepTitle = 'Step 3 of 4: Verifying Application Files';
-      modalStepDetail = applyState.detail || 'Checking launcher binaries and securing database (shifts.db)';
+      modalMasterProgress = 50 + Math.round((applyState.progress / 100) * 25);
+      modalStepTitle = 'Step 2 of 4: Verifying Setup Package';
+      modalStepDetail = applyState.detail || 'Checking installer integrity and headers';
     } else if (applyState.status === 'staging') {
       modalStep = 3;
-      modalMasterProgress = 80 + Math.round((applyState.progress / 100) * 15);
-      modalStepTitle = 'Step 3 of 4: Arming Zero-Shell Silent Runner';
-      modalStepDetail = applyState.detail || 'Preparing silent background replacement script';
+      modalMasterProgress = 75 + Math.round((applyState.progress / 100) * 15);
+      modalStepTitle = 'Step 3 of 4: Arming Silent Setup Runner';
+      modalStepDetail = applyState.detail || 'Configuring detached background updater';
     } else if (applyState.status === 'restarting') {
       modalStep = 4;
       modalMasterProgress = 100;
-      modalStepTitle = 'Step 4 of 4: Restarting Teams Shifts';
-      modalStepDetail = 'Application will relaunch automatically in 2-3 seconds with new version';
+      modalStepTitle = 'Step 4 of 4: Installing & Restarting Teams Shifts';
+      modalStepDetail = 'Setup is silently installing files and will relaunch Teams Shifts automatically in a few seconds.';
     } else if (applyState.status === 'error') {
       modalStepTitle = 'Update Failed';
       modalStepDetail = applyState.error || 'An error occurred during update';
     }
   } else if (downloadProgress?.status === 'completed') {
     modalStep = 2;
-    modalMasterProgress = 40;
-    modalStepTitle = 'Package Downloaded & Verified';
-    modalStepDetail = `${downloadProgress.fileName} is ready to be applied.`;
+    modalMasterProgress = 50;
+    modalStepTitle = 'Step 2 of 4: Package Ready';
+    modalStepDetail = `${downloadProgress.fileName} downloaded. Initiating silent installer...`;
   }
 
   const combinedModalLogs = [...localModalLogs];

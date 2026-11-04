@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { spawn } from 'child_process';
+import { spawn, execSync } from 'child_process';
 import { getAppDir, isAppInstalled } from '@/lib/edition';
 
 interface ApplyLog {
@@ -180,105 +180,49 @@ export async function POST(request: Request) {
           globalForApply.applyState.detail = 'Configuring detached background installer execution and automatic relaunch';
         }
 
-        // Build detached PowerShell and CMD update runners
+        // Build detached update runner batch script
         const ts = Date.now();
-        const psPath = path.join(updatesDir, `teams-shifts-installer-${ts}.ps1`);
-        const cmdPath = path.join(updatesDir, `teams-shifts-installer-${ts}.cmd`);
-
-        const escAppDir = appDir.replace(/'/g, "''");
-        const escInstallerPath = targetFilePath.replace(/'/g, "''");
-        const escFlagFile = flagFile.replace(/'/g, "''");
+        const cmdPath = path.join(updatesDir, `teams-shifts-updater-${ts}.cmd`);
         const exePath = path.join(appDir, 'TeamsShifts.exe');
-        const escExePath = exePath.replace(/'/g, "''");
 
-        const psContent = [
-          `$ErrorActionPreference = 'SilentlyContinue'`,
-          ``,
-          `# 1. Allow web server 2.5 seconds to return HTTP response to client`,
-          `Start-Sleep -Milliseconds 2500`,
-          ``,
-          `# 2. Wait up to 10 seconds for TeamsShifts and node to exit cleanly`,
-          `$deadline = (Get-Date).AddSeconds(10)`,
-          `while ((Get-Date) -lt $deadline) {`,
-          `    $procs = Get-Process -Name TeamsShifts,node -ErrorAction SilentlyContinue`,
-          `    if (-not $procs) { break }`,
-          `    Start-Sleep -Milliseconds 500`,
-          `}`,
-          ``,
-          `# Force terminate any remaining instances if still running`,
-          `Get-Process -Name TeamsShifts,node -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue`,
-          `Start-Sleep -Milliseconds 800`,
-          ``,
-          `# 3. Check if writing to appDir requires administrator elevation`,
-          `$needsElevation = $false`,
-          `try {`,
-          `    $testFile = Join-Path '${escAppDir}' (".write_test_" + [Guid]::NewGuid().ToString('N'))`,
-          `    [System.IO.File]::WriteAllText($testFile, "test")`,
-          `    [System.IO.File]::Delete($testFile)`,
-          `} catch {`,
-          `    $needsElevation = $true`,
-          `}`,
-          ``,
-          `# 4. Run Inno Setup installer silently, targeting the exact appDir`,
-          `$innoArgs = @(`,
-          `    '/VERYSILENT',`,
-          `    '/SUPPRESSMSGBOXES',`,
-          `    '/NORESTART',`,
-          `    '/SP-',`,
-          `    '/CLOSEAPPLICATIONS',`,
-          `    '/FORCECLOSEAPPLICATIONS',`,
-          `    '/DIR="${escAppDir}"'`,
-          `)`,
-          `$argString = $innoArgs -join ' '`,
-          ``,
-          `if ($needsElevation) {`,
-          `    $proc = Start-Process -FilePath '${escInstallerPath}' -ArgumentList $argString -Verb RunAs -Wait -PassThru`,
-          `} else {`,
-          `    $proc = Start-Process -FilePath '${escInstallerPath}' -ArgumentList $argString -Wait -PassThru -WindowStyle Hidden`,
-          `}`,
-          ``,
-          `Start-Sleep -Seconds 2`,
-          ``,
-          `# 5. Clean up updating flag`,
-          `if (Test-Path '${escFlagFile}') {`,
-          `    Remove-Item -Path '${escFlagFile}' -Force -ErrorAction SilentlyContinue`,
-          `}`,
-          ``,
-          `# 6. Relaunch updated Teams Shifts application`,
-          `$targetExe = '${escExePath}'`,
-          `if (-not (Test-Path $targetExe)) {`,
-          `    $reg = Get-ItemProperty "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*" -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like "*Teams Shifts*" } | Select-Object -First 1`,
-          `    if ($reg -and $reg.InstallLocation) {`,
-          `        $targetExe = Join-Path $reg.InstallLocation "TeamsShifts.exe"`,
-          `    }`,
-          `}`,
-          ``,
-          `if (Test-Path $targetExe) {`,
-          `    Start-Process -FilePath $targetExe -WindowStyle Normal`,
-          `}`,
-          ``,
-          `# 7. Clean up script files`,
-          `Start-Sleep -Seconds 2`,
-          `Remove-Item -Path '${psPath.replace(/'/g, "''")}' -Force -ErrorAction SilentlyContinue`,
-          `Remove-Item -Path '${cmdPath.replace(/'/g, "''")}' -Force -ErrorAction SilentlyContinue`,
-        ].join('\r\n');
-
+        // Command script that waits 2 seconds, kills existing processes, runs Inno Setup installer silently,
+        // cleans up flag, relaunches the updated Teams Shifts, and deletes itself.
         const cmdContent = [
-          `@echo off`,
-          `timeout /t 3 >nul`,
-          `taskkill /F /IM TeamsShifts.exe >nul 2>&1`,
-          `taskkill /F /IM node.exe >nul 2>&1`,
-          `timeout /t 1 >nul`,
+          '@echo off',
+          'setlocal enabledelayedexpansion',
+          '',
+          ':: 1. Allow the HTTP response to be delivered to the client browser UI',
+          'timeout /t 2 /nobreak >nul',
+          '',
+          ':: 2. Terminate running TeamsShifts and node instances cleanly',
+          'taskkill /F /IM TeamsShifts.exe >nul 2>&1',
+          'taskkill /F /IM node.exe >nul 2>&1',
+          'timeout /t 1 /nobreak >nul',
+          '',
+          ':: 3. Run Inno Setup installer silently',
           `"${targetFilePath}" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /CLOSEAPPLICATIONS /FORCECLOSEAPPLICATIONS /DIR="${appDir}"`,
-          `timeout /t 2 >nul`,
+          '',
+          ':: 4. Brief pause for files and mutex to settle',
+          'timeout /t 2 /nobreak >nul',
+          '',
+          ':: 5. Clean up updating flag and installer package',
           `if exist "${flagFile}" del /f /q "${flagFile}" >nul 2>&1`,
-          `if exist "${exePath}" start "" "${exePath}"`,
-          `del /f /q "%~f0" >nul 2>&1`,
+          `if exist "${targetFilePath}" del /f /q "${targetFilePath}" >nul 2>&1`,
+          '',
+          ':: 6. Relaunch updated Teams Shifts application',
+          `if exist "${exePath}" (`,
+          `    start "" "${exePath}"`,
+          ') else (',
+          `    start "" "${appDir}\\TeamsShifts.exe"`,
+          ')',
+          '',
+          ':: 7. Self-delete this batch script',
+          'timeout /t 1 /nobreak >nul',
+          'del /f /q "%~f0" >nul 2>&1',
         ].join('\r\n');
 
-        fs.writeFileSync(psPath, psContent, 'utf8');
         fs.writeFileSync(cmdPath, cmdContent, 'utf8');
-        addLog('Silent setup runner armed (detached process).', 'success');
+        addLog('Silent setup runner armed (decoupled batch runner).', 'success');
 
         if (globalForApply.applyState) {
           globalForApply.applyState.status = 'restarting';
@@ -289,38 +233,42 @@ export async function POST(request: Request) {
         }
         addLog('Teams Shifts is closing down for silent setup. Relaunching automatically...', 'info');
 
-        // Launch updater detached via WMI Win32_Process.Create so it runs completely independent of Node's process tree and Job Object
-        const wmiCmd = `(Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = 'powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "${psPath.replace(/\\/g, '\\\\')}"' }).ReturnValue`;
-
+        // Launch decoupled via Windows Task Scheduler so it runs completely outside any Job Object
+        let launched = false;
+        const taskName = `TeamsShiftsUpdate_${ts}`;
         try {
-          const wmiRunner = spawn('powershell.exe', [
-            '-NoProfile',
-            '-NonInteractive',
-            '-WindowStyle', 'Hidden',
-            '-ExecutionPolicy', 'Bypass',
-            '-Command',
-            wmiCmd,
-          ], {
-            detached: true,
-            stdio: 'ignore',
-            windowsHide: true,
-          });
-          wmiRunner.unref();
-        } catch (wmiErr: any) {
-          console.warn('[AutoUpdate] WMI spawn failed, using cmd start fallback:', wmiErr);
-          const cmdRunner = spawn('cmd.exe', ['/c', 'start', '""', '/b', 'powershell.exe', '-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', psPath], {
-            detached: true,
-            stdio: 'ignore',
-            windowsHide: true,
-          });
-          cmdRunner.unref();
+          execSync(`schtasks /create /tn "${taskName}" /tr "cmd.exe /c \\"${cmdPath}\\"" /sc once /st "23:59" /f`, { stdio: 'ignore' });
+          execSync(`schtasks /run /tn "${taskName}"`, { stdio: 'ignore' });
+          try {
+            execSync(`schtasks /delete /tn "${taskName}" /f`, { stdio: 'ignore' });
+          } catch {}
+          launched = true;
+          addLog('Update runner handed off to Windows Task Scheduler.', 'success');
+        } catch (taskErr: any) {
+          console.warn('[AutoUpdate] schtasks launch failed, falling back to cmd start:', taskErr);
         }
 
-        // Gracefully exit node process after 2 seconds
+        if (!launched) {
+          try {
+            const cmdRunner = spawn('cmd.exe', ['/c', 'start', '""', '/b', cmdPath], {
+              detached: true,
+              stdio: 'ignore',
+              windowsHide: true,
+            });
+            cmdRunner.unref();
+            launched = true;
+            addLog('Update runner launched via background shell process.', 'success');
+          } catch (cmdErr: any) {
+            console.error('[AutoUpdate] Fallback runner spawn failed:', cmdErr);
+            throw new Error('Failed to launch update installer: ' + cmdErr.message);
+          }
+        }
+
+        // Gracefully exit node process after 1.5 seconds
         setTimeout(() => {
           console.log('[AutoUpdate] Graceful exit for silent installer execution...');
           process.exit(0);
-        }, 2000);
+        }, 1500);
       } catch (err: any) {
         console.error('[AutoUpdate] Background apply error:', err);
         addLog(`Update failed: ${err?.message || err}`, 'error');

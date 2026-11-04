@@ -214,7 +214,8 @@ export default function VersionPage() {
   const triggerOneClickUpdate = (assetType: 'installer' | 'portable' = 'installer') => {
     setSelectedAssetType('installer');
     setIsUpdating(true);
-    if (downloadProgress?.status === 'completed' && downloadProgress?.assetType === 'installer') {
+    setApplyState(null);
+    if (downloadProgress?.status === 'completed') {
       applyUpdate('installer');
     } else {
       startInAppDownload('installer');
@@ -249,10 +250,7 @@ export default function VersionPage() {
         const data = await pollDownloadStatus();
         if (data?.status === 'completed') {
           addLocalLog(`Package ${data.fileName} downloaded successfully (${data.totalFormatted}).`, 'success');
-          // Automatically trigger apply if user initiated 1-click update
-          if (isUpdating && (!applyState || applyState.status === 'idle')) {
-            applyUpdate(data.assetType);
-          }
+          applyUpdate('installer');
           clearInterval(timer);
         } else if (data?.status === 'error') {
           addLocalLog(`Download error: ${data.error}`, 'error');
@@ -261,7 +259,7 @@ export default function VersionPage() {
       }, 500);
     }
     return () => clearInterval(timer);
-  }, [downloadProgress?.status, isUpdating, applyState?.status]);
+  }, [downloadProgress?.status, isUpdating]);
 
   // Polling loop while applying update
   useEffect(() => {
@@ -285,6 +283,25 @@ export default function VersionPage() {
     return () => clearInterval(timer);
   }, [applyState?.status, isUpdating]);
 
+  // While restarting, periodically ping the server to detect when it has relaunched
+  useEffect(() => {
+    let reconnectTimer: NodeJS.Timeout;
+    if (applyState?.status === 'restarting') {
+      reconnectTimer = setInterval(async () => {
+        try {
+          const res = await fetch('/api/version?t=' + Date.now());
+          if (res.ok) {
+            clearInterval(reconnectTimer);
+            window.location.reload();
+          }
+        } catch {
+          // Still updating/restarting
+        }
+      }, 1500);
+    }
+    return () => clearInterval(reconnectTimer);
+  }, [applyState?.status]);
+
   // Auto-scroll terminal log to bottom
   useEffect(() => {
     if (terminalRef.current) {
@@ -307,39 +324,34 @@ export default function VersionPage() {
 
   if (downloadProgress?.status === 'downloading') {
     currentStep = 1;
-    masterProgress = Math.round(downloadPct * 0.4); // 0-40%
+    masterProgress = Math.round(downloadPct * 0.5); // 0-50%
     currentStepTitle = `Step 1 of 4: Downloading ${downloadProgress.fileName}`;
     currentStepDetail = `${downloadProgress.downloadedFormatted || '0 B'} / ${downloadProgress.totalFormatted || '...'} • ${downloadProgress.speed || 'Downloading...'}`;
   } else if (applyState && applyState.status !== 'idle') {
-    if (applyState.status === 'extracting') {
+    if (applyState.status === 'preparing' || applyState.status === 'verifying') {
       currentStep = 2;
-      masterProgress = 40 + Math.round((applyState.progress / 100) * 25); // 40-65%
-      currentStepTitle = 'Step 2 of 4: Unpacking Application Archive';
-      currentStepDetail = applyState.detail || 'Extracting binaries and Next.js bundle to temporary staging area';
-    } else if (applyState.status === 'verifying') {
-      currentStep = 3;
-      masterProgress = 65 + Math.round((applyState.progress / 100) * 15); // 65-80%
-      currentStepTitle = 'Step 3 of 4: Verifying Application Files';
-      currentStepDetail = applyState.detail || 'Checking launcher binaries and securing database (shifts.db)';
+      masterProgress = 50 + Math.round((applyState.progress / 100) * 25);
+      currentStepTitle = 'Step 2 of 4: Verifying Setup Package';
+      currentStepDetail = applyState.detail || 'Checking installer integrity and headers';
     } else if (applyState.status === 'staging') {
       currentStep = 3;
-      masterProgress = 80 + Math.round((applyState.progress / 100) * 15); // 80-95%
-      currentStepTitle = 'Step 3 of 4: Arming Zero-Shell Silent Runner';
-      currentStepDetail = applyState.detail || 'Preparing silent background replacement script';
+      masterProgress = 75 + Math.round((applyState.progress / 100) * 15);
+      currentStepTitle = 'Step 3 of 4: Arming Silent Setup Runner';
+      currentStepDetail = applyState.detail || 'Configuring detached background updater';
     } else if (applyState.status === 'restarting') {
       currentStep = 4;
       masterProgress = 100;
-      currentStepTitle = 'Step 4 of 4: Restarting Teams Shifts';
-      currentStepDetail = 'Application will relaunch automatically in 2-3 seconds with new version';
+      currentStepTitle = 'Step 4 of 4: Installing & Restarting Teams Shifts';
+      currentStepDetail = 'Setup is silently installing files and will relaunch Teams Shifts automatically in a few seconds.';
     } else if (applyState.status === 'error') {
       currentStepTitle = 'Update Failed';
       currentStepDetail = applyState.error || 'An error occurred during update';
     }
   } else if (downloadProgress?.status === 'completed') {
     currentStep = 2;
-    masterProgress = 40;
-    currentStepTitle = 'Package Downloaded & Verified';
-    currentStepDetail = `${downloadProgress.fileName} is ready to be applied.`;
+    masterProgress = 50;
+    currentStepTitle = 'Step 2 of 4: Package Ready';
+    currentStepDetail = `${downloadProgress.fileName} downloaded. Initiating silent installer...`;
   }
 
   // Combine local logs and backend logs
