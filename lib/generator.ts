@@ -493,7 +493,8 @@ export function generateWeeklySchedule(
   let autoFilledCount = 0;
 
   // 5. FILL REMAINING OPEN SLOTS DAY BY DAY WITH ALL CONSTRAINTS IN MIND
-  for (const dayOffset of orderedDayIndices) {
+  for (let dayIndex = 0; dayIndex < orderedDayIndices.length; dayIndex++) {
+    const dayOffset = orderedDayIndices[dayIndex];
     const currentDate = addDays(start, dayOffset);
     const dayIsoNum = dayOffset + 1; // 1=Mon, 2=Tue, ..., 7=Sun
 
@@ -585,7 +586,7 @@ export function generateWeeklySchedule(
           if (emp.allowedLocation === 'OFFICE_ONLY') return true;
           const state = empState.get(emp.id)!;
           const maxOffice = emp.maxOfficeDays ?? config.maxOfficeDaysPerWeek;
-          const remainingDays = workingDaysArray.length - dayIndex;
+          const remainingDays = orderedDayIndices.length - dayIndex;
           const deficit = maxOffice - state.officeDays;
           return deficit >= remainingDays && deficit > 0;
         });
@@ -743,7 +744,7 @@ export function generateWeeklySchedule(
   for (const emp of allActiveEmployees) {
     if (emp.allowedLocation === 'HOME_ONLY') {
       for (const s of generatedShifts) {
-        if (s.employeeId === emp.id && !s.isManual && (!s.note || !s.note.startsWith('Client:'))) {
+        if (s.employeeId === emp.id && !s.isManual && (!s.notes || !s.notes.startsWith('Client:'))) {
           if (s.type !== 'OFF' && s.type !== 'SICK' && s.type !== 'VACATION') {
             s.location = 'HOME';
           }
@@ -789,7 +790,7 @@ export function generateWeeklySchedule(
       // Find candidate shifts that are HOME and can be converted (not manual, not client shift)
       const convertibleHomeShifts = workingShifts.filter(
         s => !s.isManual &&
-             (!s.note || !s.note.startsWith('Client:')) &&
+             (!s.notes || !s.notes.startsWith('Client:')) &&
              (s.location === 'HOME' || s.location === 'Thuis')
       );
 
@@ -810,7 +811,7 @@ export function generateWeeklySchedule(
       // Find candidate shifts that are OFFICE and can be converted (not manual, not client shift)
       const convertibleOfficeShifts = workingShifts.filter(
         s => !s.isManual &&
-             (!s.note || !s.note.startsWith('Client:')) &&
+             (!s.notes || !s.notes.startsWith('Client:')) &&
              s.location === 'OFFICE'
       );
 
