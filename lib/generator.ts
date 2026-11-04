@@ -521,6 +521,21 @@ export function generateWeeklySchedule(
     if (targetPercent >= 100) targetOffice = totalStaff;
     if (targetPercent <= 0) targetOffice = 0;
 
+    // Harmonize daily targetOffice with required office days across the team:
+    // If team rule or member limits specify high office requirements (e.g. 5 days/week or 3 days/week),
+    // ensure daily capacity scales up so members naturally hit their exact target.
+    const teamTargetOfficeSum = availableEmployees.reduce((acc, emp) => {
+      if (emp.allowedLocation === 'HOME_ONLY') return acc;
+      const target = emp.allowedLocation === 'OFFICE_ONLY'
+        ? workingDaysArray.length
+        : Math.min(workingDaysArray.length, emp.maxOfficeDays ?? config.maxOfficeDaysPerWeek);
+      return acc + target;
+    }, 0);
+    const avgOfficeNeeded = Math.round(teamTargetOfficeSum / Math.max(1, workingDaysArray.length));
+    if (avgOfficeNeeded > targetOffice && targetPercent === 50) {
+      targetOffice = Math.min(totalStaff, Math.max(targetOffice, avgOfficeNeeded));
+    }
+
     while (availableEmployees.length > 0) {
       const totalEarly = earlyOfficeCount + earlyHomeCount;
       const totalLate = lateOfficeCount + lateHomeCount;
@@ -562,7 +577,20 @@ export function generateWeeklySchedule(
           neededType = Math.random() > 0.5 ? 'EARLY' : 'LATE';
         }
 
-        if (totalOffice < targetOffice && someoneCanBeInOffice) {
+        // Priority check: if any available employee has an urgent office deficit
+        // (meaning their remaining days in the week equal or are less than what they still need in office),
+        // we must schedule OFFICE so they can meet their target!
+        const hasUrgentOfficeDeficit = availableEmployees.some(emp => {
+          if (emp.allowedLocation === 'HOME_ONLY') return false;
+          if (emp.allowedLocation === 'OFFICE_ONLY') return true;
+          const state = empState.get(emp.id)!;
+          const maxOffice = emp.maxOfficeDays ?? config.maxOfficeDaysPerWeek;
+          const remainingDays = workingDaysArray.length - dayIndex;
+          const deficit = maxOffice - state.officeDays;
+          return deficit >= remainingDays && deficit > 0;
+        });
+
+        if ((totalOffice < targetOffice || hasUrgentOfficeDeficit) && someoneCanBeInOffice) {
           neededLocation = 'OFFICE';
         } else {
           neededLocation = 'HOME';
@@ -610,7 +638,15 @@ export function generateWeeklySchedule(
         if (neededType === 'LATE') score += state.lateCount * 10;
         else score += state.earlyCount * 10;
 
-        if (neededLocation === 'OFFICE') score += state.officeDays * 10;
+        // Target Office Days prioritization:
+        // Candidates who are furthest below their target office days get strong priority for OFFICE slots,
+        // while candidates who have already met or are close to their target get priority for HOME.
+        const officeDeficit = maxOffice - state.officeDays;
+        if (neededLocation === 'OFFICE') {
+          score -= officeDeficit * 35;
+        } else if (neededLocation === 'HOME') {
+          score += officeDeficit * 35;
+        }
 
         score += Math.random() * 0.5;
 
@@ -697,6 +733,106 @@ export function generateWeeklySchedule(
     }
   }
 
+  // -------------------------------------------------------------
+  // STEP 5.5: Exact Office Days Guarantee & Harmonization Pass
+  // Guarantees that every employee hits EXACTLY their target office days:
+  // e.g. 3 day maximum -> everyone gets exactly 3 days in office.
+  // 5 day maximum -> everyone gets 5 days in office.
+  // (Capped only if employee works fewer days due to part-time or leave)
+  // -------------------------------------------------------------
+  for (const emp of allActiveEmployees) {
+    if (emp.allowedLocation === 'HOME_ONLY') {
+      for (const s of generatedShifts) {
+        if (s.employeeId === emp.id && !s.isManual && (!s.note || !s.note.startsWith('Client:'))) {
+          if (s.type !== 'OFF' && s.type !== 'SICK' && s.type !== 'VACATION') {
+            s.location = 'HOME';
+          }
+        }
+      }
+      const st = empState.get(emp.id);
+      if (st) st.officeDays = 0;
+      continue;
+    }
+
+    // Working shifts this week for this employee
+    const workingShifts = generatedShifts.filter(
+      s => s.employeeId === emp.id &&
+           s.type !== 'OFF' &&
+           s.type !== 'SICK' &&
+           s.type !== 'VACATION'
+    );
+    const schedulableCount = workingShifts.length;
+    if (schedulableCount === 0) continue;
+
+    const targetOffice = emp.allowedLocation === 'OFFICE_ONLY'
+      ? schedulableCount
+      : Math.min(schedulableCount, emp.maxOfficeDays ?? config.maxOfficeDaysPerWeek);
+
+    // Current office days (including client visits on-site and manual office shifts)
+    let currentOffice = workingShifts.filter(
+      s => s.location !== 'HOME' && s.location !== 'Thuis'
+    ).length;
+
+    // Helper: calculate total office shifts across team on a given date
+    const getTeamOfficeCountOnDate = (date: Date) => {
+      return generatedShifts.filter(
+        s => isSameDay(new Date(s.date), date) &&
+             s.location !== 'HOME' &&
+             s.location !== 'Thuis' &&
+             s.type !== 'OFF'
+      ).length;
+    };
+
+    // Case A: Deficit - employee has fewer office days than target -> promote HOME to OFFICE
+    if (currentOffice < targetOffice) {
+      const deficit = targetOffice - currentOffice;
+      // Find candidate shifts that are HOME and can be converted (not manual, not client shift)
+      const convertibleHomeShifts = workingShifts.filter(
+        s => !s.isManual &&
+             (!s.note || !s.note.startsWith('Client:')) &&
+             (s.location === 'HOME' || s.location === 'Thuis')
+      );
+
+      // Sort candidate shifts by team office count on that date ASCENDING (prefer days with fewer people in office)
+      convertibleHomeShifts.sort((a, b) => {
+        return getTeamOfficeCountOnDate(new Date(a.date)) - getTeamOfficeCountOnDate(new Date(b.date));
+      });
+
+      const toConvert = convertibleHomeShifts.slice(0, deficit);
+      for (const s of toConvert) {
+        s.location = 'OFFICE';
+        currentOffice++;
+      }
+    }
+    // Case B: Surplus - employee has more office days than target -> demote OFFICE to HOME
+    else if (currentOffice > targetOffice && emp.allowedLocation !== 'OFFICE_ONLY') {
+      const surplus = currentOffice - targetOffice;
+      // Find candidate shifts that are OFFICE and can be converted (not manual, not client shift)
+      const convertibleOfficeShifts = workingShifts.filter(
+        s => !s.isManual &&
+             (!s.note || !s.note.startsWith('Client:')) &&
+             s.location === 'OFFICE'
+      );
+
+      // Sort candidate shifts by team office count on that date DESCENDING (prefer days with the most people in office)
+      convertibleOfficeShifts.sort((a, b) => {
+        return getTeamOfficeCountOnDate(new Date(b.date)) - getTeamOfficeCountOnDate(new Date(a.date));
+      });
+
+      const toConvert = convertibleOfficeShifts.slice(0, surplus);
+      for (const s of toConvert) {
+        s.location = 'HOME';
+        currentOffice--;
+      }
+    }
+
+    // Sync empState
+    const state = empState.get(emp.id);
+    if (state) {
+      state.officeDays = currentOffice;
+    }
+  }
+
   // Build summary stats
   const shiftsByDay: Record<string, { office: number; home: number; early: number; late: number; off: number }> = {};
   for (const dayOffset of workingDaysArray) {
@@ -705,8 +841,8 @@ export function generateWeeklySchedule(
     const dayShifts = generatedShifts.filter(s => isSameDay(new Date(s.date), curDate));
 
     shiftsByDay[dateKey] = {
-      office: dayShifts.filter(s => s.location === 'OFFICE').length,
-      home: dayShifts.filter(s => s.location === 'HOME' && s.type !== 'OFF').length,
+      office: dayShifts.filter(s => s.location !== 'HOME' && s.location !== 'Thuis' && s.type !== 'OFF').length,
+      home: dayShifts.filter(s => (s.location === 'HOME' || s.location === 'Thuis') && s.type !== 'OFF').length,
       early: dayShifts.filter(s => s.type === 'EARLY').length,
       late: dayShifts.filter(s => s.type === 'LATE').length,
       off: dayShifts.filter(s => s.type === 'OFF').length,

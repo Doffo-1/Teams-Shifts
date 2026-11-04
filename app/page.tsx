@@ -5205,7 +5205,7 @@ function RulesModal({
               <div className="form-grid">
                 <div className="slider-group">
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <label className="label">Max Office Days / Week</label>
+                    <label className="label">Target Office Days / Week</label>
                     <span className="slider-val">{maxOffice} days</span>
                   </div>
                   <input
@@ -5216,7 +5216,7 @@ function RulesModal({
                     onChange={e => setMaxOffice(Number(e.target.value))}
                   />
                   <div style={{ fontSize: '0.75rem', color: 'var(--slate-400)' }}>
-                    Maximum times any member can be assigned to the Office per week.
+                    Guaranteed office days per member per week (e.g. 3 = exactly 3 days in office, 5 = full office).
                   </div>
                 </div>
 
@@ -6018,7 +6018,7 @@ function MemberEditModal({
           {/* Limits */}
           <div className="form-grid">
             <div>
-              <label className="label">Max Office Days / Week</label>
+              <label className="label">Target Office Days / Week</label>
               <input
                 type="number"
                 min="0"
@@ -6028,6 +6028,9 @@ function MemberEditModal({
                 value={maxOfficeDays}
                 onChange={e => setMaxOfficeDays(e.target.value)}
               />
+              <div style={{ fontSize: '0.725rem', color: 'var(--slate-400)', marginTop: '0.2rem' }}>
+                Guaranteed office days (blank = team default).
+              </div>
             </div>
             <div>
               <label className="label">Max Late Shifts / Week</label>
